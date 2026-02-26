@@ -2,7 +2,7 @@
  * MCP Server for Thrall
  */
 
-import { launch, type Browser, type Page } from "./index";
+import { type Browser, launch, type Page } from "./index";
 
 interface JSONRPCRequest {
 	jsonrpc: "2.0";
@@ -25,7 +25,10 @@ const TOOLS = [
 		inputSchema: {
 			type: "object",
 			properties: {
-				headless: { type: "boolean", description: "Run headless (default: true)" },
+				headless: {
+					type: "boolean",
+					description: "Run headless (default: true)",
+				},
 			},
 		},
 	},
@@ -134,7 +137,10 @@ const TOOLS = [
 			type: "object",
 			properties: {
 				selector: { type: "string", description: "CSS selector" },
-				timeout: { type: "number", description: "Timeout in ms (default: 30000)" },
+				timeout: {
+					type: "number",
+					description: "Timeout in ms (default: 30000)",
+				},
 			},
 			required: ["selector"],
 		},
@@ -162,7 +168,10 @@ const TOOLS = [
 			properties: {
 				latitude: { type: "number", description: "Latitude" },
 				longitude: { type: "number", description: "Longitude" },
-				accuracy: { type: "number", description: "Accuracy in meters (default: 1)" },
+				accuracy: {
+					type: "number",
+					description: "Accuracy in meters (default: 1)",
+				},
 			},
 			required: ["latitude", "longitude"],
 		},
@@ -185,7 +194,10 @@ const TOOLS = [
 		inputSchema: {
 			type: "object",
 			properties: {
-				role: { type: "string", description: "ARIA role (button, link, textbox, etc.)" },
+				role: {
+					type: "string",
+					description: "ARIA role (button, link, textbox, etc.)",
+				},
 				name: { type: "string", description: "Accessible name to filter by" },
 			},
 			required: ["role"],
@@ -226,20 +238,27 @@ class MCPServer {
 				return { tools: TOOLS };
 
 			case "tools/call":
-				return this.handleToolCall(params as { name: string; arguments?: Record<string, unknown> });
+				return this.handleToolCall(
+					params as { name: string; arguments?: Record<string, unknown> },
+				);
 
 			default:
 				throw new Error(`Unknown method: ${method}`);
 		}
 	}
 
-	private async handleToolCall(params: { name: string; arguments?: Record<string, unknown> }): Promise<unknown> {
+	private async handleToolCall(params: {
+		name: string;
+		arguments?: Record<string, unknown>;
+	}): Promise<unknown> {
 		const { name, arguments: args = {} } = params;
 
 		switch (name) {
 			case "launch": {
 				if (this.browser) await this.browser.close();
-				this.browser = await launch({ headless: (args.headless as boolean) ?? true });
+				this.browser = await launch({
+					headless: (args.headless as boolean) ?? true,
+				});
 				this.page = await this.browser.newPage();
 				return { content: [{ type: "text", text: "Browser launched" }] };
 			}
@@ -256,19 +275,25 @@ class MCPServer {
 			case "navigate": {
 				this.requirePage();
 				await this.page!.goto(args.url as string);
-				return { content: [{ type: "text", text: `Navigated to ${args.url}` }] };
+				return {
+					content: [{ type: "text", text: `Navigated to ${args.url}` }],
+				};
 			}
 
 			case "click": {
 				this.requirePage();
 				await this.page!.click(args.selector as string);
-				return { content: [{ type: "text", text: `Clicked ${args.selector}` }] };
+				return {
+					content: [{ type: "text", text: `Clicked ${args.selector}` }],
+				};
 			}
 
 			case "type": {
 				this.requirePage();
 				await this.page!.type(args.selector as string, args.text as string);
-				return { content: [{ type: "text", text: `Typed into ${args.selector}` }] };
+				return {
+					content: [{ type: "text", text: `Typed into ${args.selector}` }],
+				};
 			}
 
 			case "fill": {
@@ -279,13 +304,17 @@ class MCPServer {
 
 			case "screenshot": {
 				this.requirePage();
-				const buffer = await this.page!.screenshot({ fullPage: args.fullPage as boolean });
+				const buffer = await this.page!.screenshot({
+					fullPage: args.fullPage as boolean,
+				});
 				return {
-					content: [{
-						type: "image",
-						data: buffer.toString("base64"),
-						mimeType: "image/png",
-					}],
+					content: [
+						{
+							type: "image",
+							data: buffer.toString("base64"),
+							mimeType: "image/png",
+						},
+					],
 				};
 			}
 
@@ -318,7 +347,9 @@ class MCPServer {
 			case "evaluate": {
 				this.requirePage();
 				const result = await this.page!.evaluate(args.script as string);
-				return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+				return {
+					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				};
 			}
 
 			case "wait_for_selector": {
@@ -354,7 +385,14 @@ class MCPServer {
 					longitude: args.longitude as number,
 					accuracy: args.accuracy as number | undefined,
 				});
-				return { content: [{ type: "text", text: `Geolocation set to ${args.latitude}, ${args.longitude}` }] };
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Geolocation set to ${args.latitude}, ${args.longitude}`,
+						},
+					],
+				};
 			}
 
 			case "get_by_text": {
@@ -422,11 +460,13 @@ export async function serve(): Promise<void> {
 					console.log(JSON.stringify(res));
 				}
 			} catch (err) {
-				console.log(JSON.stringify({
-					jsonrpc: "2.0",
-					id: null,
-					error: { code: -32700, message: "Parse error" },
-				}));
+				console.log(
+					JSON.stringify({
+						jsonrpc: "2.0",
+						id: null,
+						error: { code: -32700, message: "Parse error" },
+					}),
+				);
 			}
 		}
 	}
