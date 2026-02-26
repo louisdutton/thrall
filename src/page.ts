@@ -523,47 +523,68 @@ export class Page {
 		});
 	}
 
+	/**
+	 * Find an element by its text content. Auto-waits until the element is found
+	 * or the timeout is reached.
+	 * @param text - Text to search for (partial match by default)
+	 * @param options.exact - If true, match the full trimmed text exactly
+	 * @param options.timeout - Max time to wait in ms (default: 30000)
+	 * @throws If no matching element is found within the timeout
+	 */
 	async getByText(
 		text: string,
-		options: { exact?: boolean } = {},
-	): Promise<ElementHandle | null> {
-		const { exact = false } = options;
+		options: { exact?: boolean; timeout?: number } = {},
+	): Promise<ElementHandle> {
+		const { exact = false, timeout = 30000 } = options;
+		const start = Date.now();
 
-		// Ensure full DOM tree is loaded
-		await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
+		while (Date.now() - start < timeout) {
+			// Ensure full DOM tree is loaded
+			await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
 
-		const result = await this.cdp.send<{
-			result: { objectId?: string };
-			exceptionDetails?: unknown;
-		}>("Runtime.evaluate", {
-			expression: `(() => {
-				const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-				while (walker.nextNode()) {
-					const node = walker.currentNode;
-					const matches = ${exact}
-						? node.textContent?.trim() === ${JSON.stringify(text)}
-						: node.textContent?.includes(${JSON.stringify(text)});
-					if (matches && node.parentElement) {
-						return node.parentElement;
+			const result = await this.cdp.send<{
+				result: { objectId?: string };
+				exceptionDetails?: unknown;
+			}>("Runtime.evaluate", {
+				expression: `(() => {
+					const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+					while (walker.nextNode()) {
+						const node = walker.currentNode;
+						const matches = ${exact}
+							? node.textContent?.trim() === ${JSON.stringify(text)}
+							: node.textContent?.includes(${JSON.stringify(text)});
+						if (matches && node.parentElement) {
+							return node.parentElement;
+						}
 					}
+					return null;
+				})()`,
+				returnByValue: false,
+			});
+
+			if (!result.exceptionDetails && result.result.objectId) {
+				const requestResult = await this.cdp.send<{ nodeId: number }>(
+					"DOM.requestNode",
+					{ objectId: result.result.objectId },
+				);
+
+				if (requestResult.nodeId) {
+					return new ElementHandle(this.cdp, requestResult.nodeId);
 				}
-				return null;
-			})()`,
-			returnByValue: false,
-		});
+			}
 
-		if (result.exceptionDetails || !result.result.objectId) return null;
+			await Bun.sleep(100);
+		}
 
-		const requestResult = await this.cdp.send<{ nodeId: number }>(
-			"DOM.requestNode",
-			{ objectId: result.result.objectId },
-		);
-
-		if (!requestResult.nodeId) return null;
-
-		return new ElementHandle(this.cdp, requestResult.nodeId);
+		throw new Error(`Unable to find element with text: ${text}`);
 	}
 
+	/**
+	 * Find all elements matching the given text content. Returns immediately
+	 * with all current matches (may be an empty array).
+	 * @param text - Text to search for (partial match by default)
+	 * @param options.exact - If true, match the full trimmed text exactly
+	 */
 	async getAllByText(
 		text: string,
 		options: { exact?: boolean } = {},
@@ -634,11 +655,21 @@ export class Page {
 		return elements;
 	}
 
+	/**
+	 * Find an element by its ARIA role. Supports both explicit roles and implicit
+	 * roles (e.g. button, link, textbox, checkbox, radio, heading). Auto-waits
+	 * until the element is found or the timeout is reached.
+	 * @param role - ARIA role to search for
+	 * @param options.name - Filter by accessible name (aria-label or text content)
+	 * @param options.timeout - Max time to wait in ms (default: 30000)
+	 * @throws If no matching element is found within the timeout
+	 */
 	async getByRole(
 		role: string,
-		options: { name?: string } = {},
-	): Promise<ElementHandle | null> {
-		const { name } = options;
+		options: { name?: string; timeout?: number } = {},
+	): Promise<ElementHandle> {
+		const { name, timeout = 30000 } = options;
+		const start = Date.now();
 
 		// Build selector for explicit role + implicit roles
 		const implicit: Record<string, string> = {
@@ -656,25 +687,33 @@ export class Page {
 		}
 		const combinedSelector = selectors.join(", ");
 
-		// If no name filter, use simple querySelector
-		if (!name) {
-			return this.$(combinedSelector);
+		while (Date.now() - start < timeout) {
+			// If no name filter, use simple querySelector
+			if (!name) {
+				const element = await this.$(combinedSelector);
+				if (element) return element;
+			} else {
+				// With name filter, get all candidates and filter
+				const candidates = await this.$$(combinedSelector);
+				for (const element of candidates) {
+					const ariaLabel = await element.getAttribute("aria-label");
+					if (ariaLabel?.includes(name)) {
+						return element;
+					}
+					const textContent = await element.textContent();
+					if (textContent?.includes(name)) {
+						return element;
+					}
+				}
+			}
+
+			await Bun.sleep(100);
 		}
 
-		// With name filter, get all candidates and filter
-		const candidates = await this.$$(combinedSelector);
-		for (const element of candidates) {
-			const ariaLabel = await element.getAttribute("aria-label");
-			if (ariaLabel?.includes(name)) {
-				return element;
-			}
-			const textContent = await element.textContent();
-			if (textContent?.includes(name)) {
-				return element;
-			}
-		}
-
-		return null;
+		const errorMsg = name
+			? `Unable to find element with role "${role}" and name "${name}"`
+			: `Unable to find element with role "${role}"`;
+		throw new Error(errorMsg);
 	}
 
 	async close(): Promise<void> {

@@ -88,19 +88,19 @@ describe("thrall", () => {
 
 	test("getByText finds element by partial text", async () => {
 		const element = await page.getByText("Example");
-		expect(element).not.toBeNull();
-		const text = await element!.textContent();
+		const text = await element.textContent();
 		expect(text).toContain("Example");
 	});
 
 	test("getByText finds element by exact text", async () => {
 		const element = await page.getByText("Example Domain", { exact: true });
-		expect(element).not.toBeNull();
+		expect(element).toBeDefined();
 	});
 
-	test("getByText returns null for non-existent text", async () => {
-		const element = await page.getByText("This text does not exist anywhere");
-		expect(element).toBeNull();
+	test("getByText throws for non-existent text", async () => {
+		await expect(
+			page.getByText("This text does not exist anywhere", { timeout: 100 }),
+		).rejects.toThrow("Unable to find element with text");
 	});
 
 	test("getAllByText finds multiple elements", async () => {
@@ -111,31 +111,71 @@ describe("thrall", () => {
 
 	test("getByRole finds button/link elements", async () => {
 		const link = await page.getByRole("link");
-		expect(link).not.toBeNull();
-		const href = await link!.getAttribute("href");
+		const href = await link.getAttribute("href");
 		expect(href).toContain("iana.org");
 	});
 
 	test("getByRole with name filter", async () => {
 		const link = await page.getByRole("link", { name: "Learn more" });
-		expect(link).not.toBeNull();
+		expect(link).toBeDefined();
 	});
 
-	test("getByRole returns null for non-matching name", async () => {
-		const link = await page.getByRole("link", { name: "Nonexistent Link" });
-		expect(link).toBeNull();
+	test("getByRole throws for non-matching name", async () => {
+		await expect(
+			page.getByRole("link", { name: "Nonexistent Link", timeout: 100 }),
+		).rejects.toThrow('Unable to find element with role "link"');
 	});
 
 	test("getByText handles text with spaces", async () => {
 		// "Example Domain" has a space - this was the original bug
 		const element = await page.getByText("Example Domain");
-		expect(element).not.toBeNull();
-		const text = await element!.textContent();
+		const text = await element.textContent();
 		expect(text).toBe("Example Domain");
 	});
 
 	test("getByText handles partial match with spaces", async () => {
 		const element = await page.getByText("ample Dom");
-		expect(element).not.toBeNull();
+		expect(element).toBeDefined();
+	});
+
+	test("getByText auto-waits for element to appear", async () => {
+		// Inject element after 200ms delay
+		page.evaluate(() => {
+			setTimeout(() => {
+				const span = document.createElement("span");
+				span.textContent = "Delayed Text Content";
+				document.body.appendChild(span);
+			}, 200);
+		});
+
+		const start = Date.now();
+		const element = await page.getByText("Delayed Text Content", {
+			timeout: 5000,
+		});
+		const elapsed = Date.now() - start;
+
+		expect(element).toBeDefined();
+		expect(elapsed).toBeGreaterThanOrEqual(150); // Waited for element
+	});
+
+	test("getByRole auto-waits for element to appear", async () => {
+		// Inject button after 200ms delay
+		page.evaluate(() => {
+			setTimeout(() => {
+				const btn = document.createElement("button");
+				btn.textContent = "Delayed Button";
+				document.body.appendChild(btn);
+			}, 200);
+		});
+
+		const start = Date.now();
+		const element = await page.getByRole("button", {
+			name: "Delayed Button",
+			timeout: 5000,
+		});
+		const elapsed = Date.now() - start;
+
+		expect(element).toBeDefined();
+		expect(elapsed).toBeGreaterThanOrEqual(150); // Waited for element
 	});
 });
