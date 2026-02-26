@@ -529,7 +529,7 @@ export class Page {
 	): Promise<ElementHandle | null> {
 		const { exact = false } = options;
 		const result = await this.cdp.send<{
-			result: { value: number };
+			result: { objectId?: string };
 			exceptionDetails?: unknown;
 		}>("Runtime.evaluate", {
 			expression: `(() => {
@@ -552,11 +552,11 @@ export class Page {
 			returnByValue: false,
 		});
 
-		if (result.exceptionDetails || !result.result.value) return null;
+		if (result.exceptionDetails || !result.result.objectId) return null;
 
 		const { node } = await this.cdp.send<{ node: { nodeId: number } }>(
 			"DOM.requestNode",
-			{ objectId: (result.result as unknown as { objectId: string }).objectId },
+			{ objectId: result.result.objectId },
 		);
 
 		return new ElementHandle(this.cdp, node.nodeId);
