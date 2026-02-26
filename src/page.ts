@@ -529,30 +529,39 @@ export class Page {
 	): Promise<ElementHandle | null> {
 		const { exact = false } = options;
 
-		// Use XPath via DOM.performSearch - returns nodeIds directly, no serialization issues
-		const escapedText = text.replace(/'/g, "\\'");
-		const xpath = exact
-			? `//*[normalize-space(text())='${escapedText}']`
-			: `//*[contains(text(),'${escapedText}')]`;
+		// Ensure full DOM tree is loaded
+		await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
 
-		const { searchId, resultCount } = await this.cdp.send<{
-			searchId: string;
-			resultCount: number;
-		}>("DOM.performSearch", { query: xpath });
+		const result = await this.cdp.send<{
+			result: { objectId?: string };
+			exceptionDetails?: unknown;
+		}>("Runtime.evaluate", {
+			expression: `(() => {
+				const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+				while (walker.nextNode()) {
+					const node = walker.currentNode;
+					const matches = ${exact}
+						? node.textContent?.trim() === ${JSON.stringify(text)}
+						: node.textContent?.includes(${JSON.stringify(text)});
+					if (matches && node.parentElement) {
+						return node.parentElement;
+					}
+				}
+				return null;
+			})()`,
+			returnByValue: false,
+		});
 
-		if (resultCount === 0) {
-			await this.cdp.send("DOM.discardSearchResults", { searchId });
-			return null;
-		}
+		if (result.exceptionDetails || !result.result.objectId) return null;
 
-		const { nodeIds } = await this.cdp.send<{ nodeIds: number[] }>(
-			"DOM.getSearchResults",
-			{ searchId, fromIndex: 0, toIndex: 1 },
+		const requestResult = await this.cdp.send<{ nodeId: number }>(
+			"DOM.requestNode",
+			{ objectId: result.result.objectId },
 		);
 
-		await this.cdp.send("DOM.discardSearchResults", { searchId });
+		if (!requestResult.nodeId) return null;
 
-		return nodeIds[0] ? new ElementHandle(this.cdp, nodeIds[0]) : null;
+		return new ElementHandle(this.cdp, requestResult.nodeId);
 	}
 
 	async getAllByText(
@@ -561,29 +570,68 @@ export class Page {
 	): Promise<ElementHandle[]> {
 		const { exact = false } = options;
 
-		const escapedText = text.replace(/'/g, "\\'");
-		const xpath = exact
-			? `//*[normalize-space(text())='${escapedText}']`
-			: `//*[contains(text(),'${escapedText}')]`;
+		// Ensure full DOM tree is loaded
+		await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
 
-		const { searchId, resultCount } = await this.cdp.send<{
-			searchId: string;
-			resultCount: number;
-		}>("DOM.performSearch", { query: xpath });
+		// Find all matches, get count first
+		const countResult = await this.cdp.send<{
+			result: { value: number };
+			exceptionDetails?: unknown;
+		}>("Runtime.evaluate", {
+			expression: `(() => {
+				let count = 0;
+				const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+				while (walker.nextNode()) {
+					const node = walker.currentNode;
+					const matches = ${exact}
+						? node.textContent?.trim() === ${JSON.stringify(text)}
+						: node.textContent?.includes(${JSON.stringify(text)});
+					if (matches && node.parentElement) count++;
+				}
+				return count;
+			})()`,
+			returnByValue: true,
+		});
 
-		if (resultCount === 0) {
-			await this.cdp.send("DOM.discardSearchResults", { searchId });
-			return [];
+		if (countResult.exceptionDetails || !countResult.result.value) return [];
+
+		// Get each element individually
+		const elements: ElementHandle[] = [];
+		for (let i = 0; i < countResult.result.value; i++) {
+			const result = await this.cdp.send<{
+				result: { objectId?: string };
+				exceptionDetails?: unknown;
+			}>("Runtime.evaluate", {
+				expression: `(() => {
+					let idx = 0;
+					const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+					while (walker.nextNode()) {
+						const node = walker.currentNode;
+						const matches = ${exact}
+							? node.textContent?.trim() === ${JSON.stringify(text)}
+							: node.textContent?.includes(${JSON.stringify(text)});
+						if (matches && node.parentElement) {
+							if (idx === ${i}) return node.parentElement;
+							idx++;
+						}
+					}
+					return null;
+				})()`,
+				returnByValue: false,
+			});
+
+			if (result.result.objectId) {
+				const requestResult = await this.cdp.send<{ nodeId: number }>(
+					"DOM.requestNode",
+					{ objectId: result.result.objectId },
+				);
+				if (requestResult.nodeId) {
+					elements.push(new ElementHandle(this.cdp, requestResult.nodeId));
+				}
+			}
 		}
 
-		const { nodeIds } = await this.cdp.send<{ nodeIds: number[] }>(
-			"DOM.getSearchResults",
-			{ searchId, fromIndex: 0, toIndex: resultCount },
-		);
-
-		await this.cdp.send("DOM.discardSearchResults", { searchId });
-
-		return nodeIds.map((nodeId) => new ElementHandle(this.cdp, nodeId));
+		return elements;
 	}
 
 	async getByRole(
@@ -608,31 +656,14 @@ export class Page {
 		}
 		const combinedSelector = selectors.join(", ");
 
-		const { searchId, resultCount } = await this.cdp.send<{
-			searchId: string;
-			resultCount: number;
-		}>("DOM.performSearch", { query: combinedSelector });
-
-		if (resultCount === 0) {
-			await this.cdp.send("DOM.discardSearchResults", { searchId });
-			return null;
-		}
-
-		const { nodeIds } = await this.cdp.send<{ nodeIds: number[] }>(
-			"DOM.getSearchResults",
-			{ searchId, fromIndex: 0, toIndex: resultCount },
-		);
-
-		await this.cdp.send("DOM.discardSearchResults", { searchId });
-
-		// If no name filter, return first result
+		// If no name filter, use simple querySelector
 		if (!name) {
-			return nodeIds[0] ? new ElementHandle(this.cdp, nodeIds[0]) : null;
+			return this.$(combinedSelector);
 		}
 
-		// Filter by name (aria-label or textContent)
-		for (const nodeId of nodeIds) {
-			const element = new ElementHandle(this.cdp, nodeId);
+		// With name filter, get all candidates and filter
+		const candidates = await this.$$(combinedSelector);
+		for (const element of candidates) {
 			const ariaLabel = await element.getAttribute("aria-label");
 			if (ariaLabel?.includes(name)) {
 				return element;
