@@ -22,37 +22,9 @@ export class ElementHandle {
 	) {}
 
 	async click(): Promise<void> {
-		const { model } = await this.cdp.send<{ model: BoxModel }>(
-			"DOM.getBoxModel",
-			{
-				nodeId: this.nodeId,
-			},
-		);
-
-		// Get center of element
-		const [x1, y1, x2, y2, x3, y3, x4, y4] = model.content;
-		const x = (x1 + x3) / 2;
-		const y = (y1 + y3) / 2;
-
-		// Mouse events
-		await this.cdp.send("Input.dispatchMouseEvent", {
-			type: "mouseMoved",
-			x,
-			y,
-		});
-		await this.cdp.send("Input.dispatchMouseEvent", {
-			type: "mousePressed",
-			x,
-			y,
-			button: "left",
-			clickCount: 1,
-		});
-		await this.cdp.send("Input.dispatchMouseEvent", {
-			type: "mouseReleased",
-			x,
-			y,
-			button: "left",
-			clickCount: 1,
+		await this.cdp.send("Runtime.callFunctionOn", {
+			objectId: await this.getObjectId(),
+			functionDeclaration: "function() { this.click(); }",
 		});
 	}
 
