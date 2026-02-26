@@ -205,6 +205,54 @@ const browser = await launch({
 | `up(options?)` | Button up |
 | `wheel(options?)` | Scroll |
 
+## MCP Server
+
+Thrall includes an MCP server for AI assistant integration.
+
+### Install
+
+```nix
+inputs.thrall.url = "github:louisdutton/thrall";
+
+# Add overlay, then use:
+pkgs.thrall-mcp
+```
+
+### Claude Desktop
+
+Add to `~/.config/claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "thrall": {
+      "command": "thrall-mcp"
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `launch` | Launch browser |
+| `close` | Close browser |
+| `navigate` | Go to URL |
+| `click` | Click element |
+| `type` | Type into element |
+| `fill` | Fill input field |
+| `screenshot` | Take screenshot (returns base64) |
+| `get_content` | Get page HTML |
+| `get_title` | Get page title |
+| `get_url` | Get current URL |
+| `get_text` | Get element text |
+| `evaluate` | Run JavaScript |
+| `wait_for_selector` | Wait for element |
+| `reload` | Reload page |
+| `go_back` | Navigate back |
+| `go_forward` | Navigate forward |
+
 ## License
 
 GPL-3.0
