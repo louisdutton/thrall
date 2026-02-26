@@ -116,6 +116,25 @@ const cookies = await page.cookies();
 await page.deleteCookie("session");
 ```
 
+### Geolocation
+
+```ts
+await page.setGeolocation({
+  latitude: 37.7749,
+  longitude: -122.4194,
+});
+```
+
+### Find by Text / Role
+
+```ts
+const signIn = await page.getByText("Sign In");
+await signIn?.click();
+
+const submitBtn = await page.getByRole("button", { name: "Submit" });
+await submitBtn?.click();
+```
+
 ## API
 
 ### launch(options?)
@@ -149,6 +168,9 @@ const browser = await launch({
 | `url()` | Get URL |
 | `$(selector)` | Query element |
 | `$$(selector)` | Query all elements |
+| `getByText(text, options?)` | Find by text content |
+| `getAllByText(text, options?)` | Find all by text |
+| `getByRole(role, options?)` | Find by ARIA role |
 | `click(selector)` | Click element |
 | `type(selector, text)` | Type text |
 | `fill(selector, value)` | Fill input |
@@ -161,6 +183,7 @@ const browser = await launch({
 | `screenshot(options?)` | Capture screenshot |
 | `pdf(options?)` | Generate PDF |
 | `setViewport(width, height)` | Set viewport |
+| `setGeolocation(coords)` | Override geolocation |
 | `setCookie(...cookies)` | Set cookies |
 | `cookies(urls?)` | Get cookies |
 | `deleteCookie(name, url?)` | Delete cookie |
@@ -252,6 +275,9 @@ Add to `~/.config/claude/claude_desktop_config.json`:
 | `reload` | Reload page |
 | `go_back` | Navigate back |
 | `go_forward` | Navigate forward |
+| `set_geolocation` | Override geolocation |
+| `get_by_text` | Find element by text |
+| `get_by_role` | Find element by role |
 
 ## License
 

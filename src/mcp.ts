@@ -154,6 +154,43 @@ const TOOLS = [
 		description: "Navigate forward.",
 		inputSchema: { type: "object", properties: {} },
 	},
+	{
+		name: "set_geolocation",
+		description: "Override browser geolocation.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				latitude: { type: "number", description: "Latitude" },
+				longitude: { type: "number", description: "Longitude" },
+				accuracy: { type: "number", description: "Accuracy in meters (default: 1)" },
+			},
+			required: ["latitude", "longitude"],
+		},
+	},
+	{
+		name: "get_by_text",
+		description: "Find element by text content.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				text: { type: "string", description: "Text to search for" },
+				exact: { type: "boolean", description: "Exact match (default: false)" },
+			},
+			required: ["text"],
+		},
+	},
+	{
+		name: "get_by_role",
+		description: "Find element by ARIA role.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				role: { type: "string", description: "ARIA role (button, link, textbox, etc.)" },
+				name: { type: "string", description: "Accessible name to filter by" },
+			},
+			required: ["role"],
+		},
+	},
 ] as const;
 
 class MCPServer {
@@ -308,6 +345,36 @@ class MCPServer {
 				this.requirePage();
 				await this.page!.goForward();
 				return { content: [{ type: "text", text: "Navigated forward" }] };
+			}
+
+			case "set_geolocation": {
+				this.requirePage();
+				await this.page!.setGeolocation({
+					latitude: args.latitude as number,
+					longitude: args.longitude as number,
+					accuracy: args.accuracy as number | undefined,
+				});
+				return { content: [{ type: "text", text: `Geolocation set to ${args.latitude}, ${args.longitude}` }] };
+			}
+
+			case "get_by_text": {
+				this.requirePage();
+				const el = await this.page!.getByText(args.text as string, {
+					exact: args.exact as boolean | undefined,
+				});
+				if (!el) throw new Error(`No element found with text: ${args.text}`);
+				const text = await el.textContent();
+				return { content: [{ type: "text", text: `Found element: ${text}` }] };
+			}
+
+			case "get_by_role": {
+				this.requirePage();
+				const el = await this.page!.getByRole(args.role as string, {
+					name: args.name as string | undefined,
+				});
+				if (!el) throw new Error(`No element found with role: ${args.role}`);
+				const text = await el.textContent();
+				return { content: [{ type: "text", text: `Found element: ${text}` }] };
 			}
 
 			default:

@@ -508,6 +508,160 @@ export class Page {
 		await this.cdp.send("Network.deleteCookies", { name, url });
 	}
 
+	async setGeolocation(coords: {
+		latitude: number;
+		longitude: number;
+		accuracy?: number;
+	}): Promise<void> {
+		await this.cdp.send("Browser.grantPermissions", {
+			permissions: ["geolocation"],
+		});
+		await this.cdp.send("Emulation.setGeolocationOverride", {
+			latitude: coords.latitude,
+			longitude: coords.longitude,
+			accuracy: coords.accuracy ?? 1,
+		});
+	}
+
+	async getByText(
+		text: string,
+		options: { exact?: boolean } = {},
+	): Promise<ElementHandle | null> {
+		const { exact = false } = options;
+		const result = await this.cdp.send<{
+			result: { value: number };
+			exceptionDetails?: unknown;
+		}>("Runtime.evaluate", {
+			expression: `(() => {
+				const walker = document.createTreeWalker(
+					document.body,
+					NodeFilter.SHOW_TEXT,
+					null
+				);
+				while (walker.nextNode()) {
+					const node = walker.currentNode;
+					const matches = ${exact}
+						? node.textContent?.trim() === ${JSON.stringify(text)}
+						: node.textContent?.includes(${JSON.stringify(text)});
+					if (matches && node.parentElement) {
+						return node.parentElement;
+					}
+				}
+				return null;
+			})()`,
+			returnByValue: false,
+		});
+
+		if (result.exceptionDetails || !result.result.value) return null;
+
+		const { node } = await this.cdp.send<{ node: { nodeId: number } }>(
+			"DOM.requestNode",
+			{ objectId: (result.result as unknown as { objectId: string }).objectId },
+		);
+
+		return new ElementHandle(this.cdp, node.nodeId);
+	}
+
+	async getAllByText(
+		text: string,
+		options: { exact?: boolean } = {},
+	): Promise<ElementHandle[]> {
+		const { exact = false } = options;
+		const result = await this.cdp.send<{
+			result: { value: unknown };
+			exceptionDetails?: unknown;
+		}>("Runtime.evaluate", {
+			expression: `(() => {
+				const elements = [];
+				const walker = document.createTreeWalker(
+					document.body,
+					NodeFilter.SHOW_TEXT,
+					null
+				);
+				while (walker.nextNode()) {
+					const node = walker.currentNode;
+					const matches = ${exact}
+						? node.textContent?.trim() === ${JSON.stringify(text)}
+						: node.textContent?.includes(${JSON.stringify(text)});
+					if (matches && node.parentElement) {
+						elements.push(node.parentElement);
+					}
+				}
+				return elements;
+			})()`,
+			returnByValue: false,
+		});
+
+		if (result.exceptionDetails) return [];
+
+		const { result: arrayProps } = await this.cdp.send<{
+			result: Array<{ name: string; value?: { objectId: string } }>;
+		}>("Runtime.getProperties", {
+			objectId: (result.result as unknown as { objectId: string }).objectId,
+			ownProperties: true,
+		});
+
+		const elements: ElementHandle[] = [];
+		for (const prop of arrayProps) {
+			if (prop.value?.objectId && !isNaN(Number(prop.name))) {
+				const { node } = await this.cdp.send<{ node: { nodeId: number } }>(
+					"DOM.requestNode",
+					{ objectId: prop.value.objectId },
+				);
+				elements.push(new ElementHandle(this.cdp, node.nodeId));
+			}
+		}
+
+		return elements;
+	}
+
+	async getByRole(
+		role: string,
+		options: { name?: string } = {},
+	): Promise<ElementHandle | null> {
+		const { name } = options;
+		const nameFilter = name
+			? `&& (el.getAttribute("aria-label")?.includes(${JSON.stringify(name)}) || el.textContent?.includes(${JSON.stringify(name)}))`
+			: "";
+
+		const result = await this.cdp.send<{
+			result: { value: unknown };
+			exceptionDetails?: unknown;
+		}>("Runtime.evaluate", {
+			expression: `(() => {
+				const el = document.querySelector('[role="${role}"]');
+				if (el ${nameFilter}) return el;
+
+				// Implicit roles
+				const implicit = {
+					button: 'button, input[type="button"], input[type="submit"]',
+					link: 'a[href]',
+					textbox: 'input[type="text"], input:not([type]), textarea',
+					checkbox: 'input[type="checkbox"]',
+					radio: 'input[type="radio"]',
+					heading: 'h1, h2, h3, h4, h5, h6',
+				};
+
+				if (implicit[${JSON.stringify(role)}]) {
+					for (const el of document.querySelectorAll(implicit[${JSON.stringify(role)}])) {
+						if (true ${nameFilter}) return el;
+					}
+				}
+				return null;
+			})()`,
+			returnByValue: false,
+		});
+
+		if (result.exceptionDetails || !result.result.value) return null;
+
+		const { node } = await this.cdp.send<{ node: { nodeId: number } }>(
+			"DOM.requestNode",
+			{ objectId: (result.result as unknown as { objectId: string }).objectId },
+		);
+
+		return new ElementHandle(this.cdp, node.nodeId);
+	}
+
 	async close(): Promise<void> {
 		await this.cdp.close();
 	}
