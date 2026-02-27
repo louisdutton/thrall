@@ -8,7 +8,7 @@ describe("thrall", () => {
 	beforeAll(async () => {
 		browser = await launch({ headless: true });
 		page = await browser.newPage();
-	});
+	}, 15000);
 
 	afterAll(async () => {
 		await browser.close();

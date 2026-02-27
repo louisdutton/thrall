@@ -129,13 +129,20 @@ export class Browser {
 
 async function findChromium(): Promise<string> {
 	// Try which command first (most reliable)
-	try {
-		const result =
-			await Bun.$`which chromium google-chrome chromium-browser 2>/dev/null | head -1`.quiet();
-		const found = result.text().trim();
-		if (found) return found;
-	} catch {
-		// Continue to fallback paths
+	for (const bin of [
+		"chromium",
+		"google-chrome",
+		"chromium-browser",
+		"brave-browser",
+		"brave",
+	]) {
+		try {
+			const result = await Bun.$`which ${bin}`.quiet();
+			const found = result.text().trim();
+			if (found && !found.includes("not found")) return found;
+		} catch {
+			// Not found, try next
+		}
 	}
 
 	const paths = [
@@ -144,13 +151,18 @@ async function findChromium(): Promise<string> {
 		"/usr/bin/chromium-browser",
 		"/usr/bin/google-chrome",
 		"/usr/bin/google-chrome-stable",
+		"/usr/bin/brave-browser",
+		"/usr/bin/brave",
 		// macOS
 		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 		// Common Nix paths
 		"/etc/profiles/per-user/louis/bin/chromium",
+		"/etc/profiles/per-user/louis/bin/brave",
 		`${process.env.HOME}/.nix-profile/bin/chromium`,
 		`${process.env.HOME}/.nix-profile/bin/google-chrome-stable`,
+		`${process.env.HOME}/.nix-profile/bin/brave`,
 	];
 
 	for (const path of paths) {
@@ -161,7 +173,7 @@ async function findChromium(): Promise<string> {
 	}
 
 	throw new Error(
-		"Could not find Chromium. Please install it or provide executablePath.",
+		"Could not find Chromium or Brave. Please install a Chromium-based browser or provide executablePath.",
 	);
 }
 
