@@ -1,6 +1,6 @@
 {
 	"name": "thrall",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Lightweight Chromium automation for Bun via CDP",
 	"main": "src/index.ts",
 	"type": "module",

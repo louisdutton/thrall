@@ -8,6 +8,7 @@ export { ElementHandle } from "./element";
 export { Keyboard } from "./keyboard";
 export { Mouse } from "./mouse";
 export { Page } from "./page";
+export { Screencast } from "./screencast";
 
 import { Browser } from "./browser";
 

@@ -6,6 +6,7 @@ import { CDPSession } from "./cdp";
 import { ElementHandle } from "./element";
 import { Keyboard } from "./keyboard";
 import { Mouse } from "./mouse";
+import { Screencast } from "./screencast";
 
 interface NavigateOptions {
 	timeout?: number;
@@ -23,6 +24,19 @@ interface ScreenshotOptions {
 	fullPage?: boolean;
 	type?: "png" | "jpeg" | "webp";
 	quality?: number;
+}
+
+interface ScreencastOptions {
+	/** Image format for frames */
+	format?: "jpeg" | "png";
+	/** JPEG quality (0-100) */
+	quality?: number;
+	/** Maximum width of frames */
+	maxWidth?: number;
+	/** Maximum height of frames */
+	maxHeight?: number;
+	/** Capture every Nth frame (1 = all frames) */
+	everyNthFrame?: number;
 }
 
 export class Page {
@@ -714,6 +728,16 @@ export class Page {
 			? `Unable to find element with role "${role}" and name "${name}"`
 			: `Unable to find element with role "${role}"`;
 		throw new Error(errorMsg);
+	}
+
+	/**
+	 * Start a screencast recording session.
+	 * Returns a Screencast instance that can be used to stop recording and save the video.
+	 */
+	async startScreencast(options: ScreencastOptions = {}): Promise<Screencast> {
+		const screencast = new Screencast(this.cdp, options);
+		await screencast.start();
+		return screencast;
 	}
 
 	async close(): Promise<void> {
