@@ -2,7 +2,7 @@
  * Screencast - record browser sessions as video via CDP
  */
 
-import { CDPSession } from "./cdp";
+import type { CDPSession } from "./cdp";
 
 interface ScreencastOptions {
 	/** Image format for frames */
@@ -174,8 +174,8 @@ export class Screencast {
 			const ext = this.options.format === "png" ? "png" : "jpg";
 			const pattern = `${tempDir}/frame-%05d.${ext}`;
 
-			// Use ffmpeg to create video
-			await Bun.$`ffmpeg -y -framerate ${fps} -i ${pattern} -c:v libx264 -pix_fmt yuv420p -preset fast ${outputPath}`.quiet();
+			// Use ffmpeg to create video (pad to even dimensions for h264 compatibility)
+			await Bun.$`ffmpeg -y -framerate ${fps} -i ${pattern} -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -c:v libx264 -pix_fmt yuv420p -preset fast ${outputPath}`.quiet();
 		} finally {
 			// Cleanup temp directory
 			await Bun.$`rm -rf ${tempDir}`;
@@ -220,8 +220,9 @@ export class Screencast {
 			const pattern = `${tempDir}/frame-%05d.${ext}`;
 
 			// Use ffmpeg to create GIF with palette for better quality
+			// pad to even dimensions first, then scale for GIF
 			const paletteFile = `${tempDir}/palette.png`;
-			const filters = `fps=${fps},scale=${width}:-1:flags=lanczos`;
+			const filters = `pad=ceil(iw/2)*2:ceil(ih/2)*2,fps=${fps},scale=${width}:-1:flags=lanczos`;
 
 			await Bun.$`ffmpeg -y -framerate ${fps} -i ${pattern} -vf "${filters},palettegen" ${paletteFile}`.quiet();
 			await Bun.$`ffmpeg -y -framerate ${fps} -i ${pattern} -i ${paletteFile} -lavfi "${filters} [x]; [x][1:v] paletteuse" ${outputPath}`.quiet();
