@@ -34,10 +34,11 @@ export class Browser {
 	}
 
 	static async launch(options: BrowserOptions = {}): Promise<Browser> {
+		const envDefaults = resolveEnvDefaults(process.env);
 		const {
-			headless = true,
-			executablePath = await findChromium(),
-			args = [],
+			headless = envDefaults.headless ?? true,
+			executablePath = envDefaults.executablePath ?? (await findChromium()),
+			args = envDefaults.args ?? [],
 		} = options;
 
 		const port = await getRandomPort();
@@ -125,6 +126,36 @@ export class Browser {
 			this.process = null;
 		}
 	}
+}
+
+function envBool(val: string | undefined): boolean | undefined {
+	if (val === undefined) return undefined;
+	const v = val.trim().toLowerCase();
+	if (v === "1" || v === "true" || v === "yes") return true;
+	if (v === "0" || v === "false" || v === "no" || v === "") return false;
+	return undefined;
+}
+
+export function resolveEnvDefaults(env: NodeJS.ProcessEnv): Partial<BrowserOptions> {
+	const defaults: Partial<BrowserOptions> = {};
+
+	// THRALL_HEADED=1 → headless: false
+	const headed = envBool(env.THRALL_HEADED);
+	if (headed !== undefined) {
+		defaults.headless = !headed;
+	}
+
+	// THRALL_BROWSER → executablePath
+	if (env.THRALL_BROWSER) {
+		defaults.executablePath = env.THRALL_BROWSER;
+	}
+
+	// THRALL_ARGS → extra chromium args (comma-separated)
+	if (env.THRALL_ARGS) {
+		defaults.args = env.THRALL_ARGS.split(",").map((a) => a.trim()).filter(Boolean);
+	}
+
+	return defaults;
 }
 
 async function findChromium(): Promise<string> {
