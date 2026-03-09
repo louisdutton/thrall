@@ -740,6 +740,30 @@ export class Page {
 		return screencast;
 	}
 
+	/**
+	 * Set files on a file input element, identified by CSS selector.
+	 * Uses CDP DOM.setFileInputFiles to programmatically set files.
+	 * @param selector - CSS selector for the input[type="file"] element
+	 * @param files - Array of absolute file paths to set
+	 */
+	async setInputFiles(selector: string, files: string[]): Promise<void> {
+		await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
+		const { nodeId } = await this.cdp.send<{ nodeId: number }>(
+			"DOM.querySelector",
+			{
+				nodeId: (
+					await this.cdp.send<{ root: { nodeId: number } }>(
+						"DOM.getDocument",
+						{},
+					)
+				).root.nodeId,
+				selector,
+			},
+		);
+		if (!nodeId) throw new Error(`File input not found: ${selector}`);
+		await this.cdp.send("DOM.setFileInputFiles", { files, nodeId });
+	}
+
 	async close(): Promise<void> {
 		await this.cdp.close();
 	}
