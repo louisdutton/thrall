@@ -9,6 +9,7 @@ export { Keyboard } from "./keyboard";
 export { Mouse } from "./mouse";
 export { Page } from "./page";
 export { Screencast } from "./screencast";
+export { connect as connectDevice, Device } from "./adb";
 
 import { Browser } from "./browser";
 

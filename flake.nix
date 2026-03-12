@@ -52,6 +52,7 @@
           typescript-go
           nixd
           alejandra
+          android-tools
         ];
       };
     });

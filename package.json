@@ -1,7 +1,7 @@
 {
 	"name": "thrall",
 	"version": "0.2.0",
-	"description": "Lightweight Chromium automation for Bun via CDP",
+	"description": "Lightweight Chromium and Android automation for Bun",
 	"main": "src/index.ts",
 	"type": "module",
 	"files": [
@@ -24,6 +24,8 @@
 		"bun",
 		"chromium",
 		"cdp",
+		"adb",
+		"android",
 		"automation",
 		"testing",
 		"browser"
