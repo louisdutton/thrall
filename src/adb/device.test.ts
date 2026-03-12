@@ -243,4 +243,10 @@ describe.skipIf(!deviceAvailable)("Device (integration)", () => {
 		await Bun.sleep(500);
 		// Should be on home screen — just verify no error
 	});
+
+	test("setLocation and clearLocation", async () => {
+		// Set mock location to San Francisco — verifies no errors thrown
+		await device.setLocation(37.7749, -122.4194);
+		await device.clearLocation();
+	}, 15000);
 });

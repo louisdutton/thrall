@@ -159,6 +159,74 @@ export class Device {
 		return result.text().trim();
 	}
 
+	async setLocation(lat: number, lng: number): Promise<void> {
+		const provider = "gps";
+		// Grant mock location permission to the shell
+		const grantArgs = this.adb([
+			"shell",
+			"appops",
+			"set",
+			"com.android.shell",
+			"android:mock_location",
+			"allow",
+		]);
+		await Bun.$`adb ${grantArgs}`.quiet();
+
+		const addArgs = this.adb([
+			"shell",
+			"cmd",
+			"location",
+			"providers",
+			"add-test-provider",
+			provider,
+		]);
+		const enableArgs = this.adb([
+			"shell",
+			"cmd",
+			"location",
+			"providers",
+			"set-test-provider-enabled",
+			provider,
+			"true",
+		]);
+		const setArgs = this.adb([
+			"shell",
+			"cmd",
+			"location",
+			"providers",
+			"set-test-provider-location",
+			provider,
+			"--location",
+			`${lat},${lng}`,
+		]);
+		await Bun.$`adb ${addArgs}`.quiet().nothrow();
+		await Bun.$`adb ${enableArgs}`.quiet();
+		await Bun.$`adb ${setArgs}`.quiet();
+	}
+
+	async clearLocation(): Promise<void> {
+		const provider = "gps";
+		const disableArgs = this.adb([
+			"shell",
+			"cmd",
+			"location",
+			"providers",
+			"set-test-provider-enabled",
+			provider,
+			"false",
+		]);
+		const removeArgs = this.adb([
+			"shell",
+			"cmd",
+			"location",
+			"providers",
+			"remove-test-provider",
+			provider,
+		]);
+		await Bun.$`adb ${disableArgs}`.quiet().nothrow();
+		await Bun.$`adb ${removeArgs}`.quiet().nothrow();
+	}
+
 	async close(): Promise<void> {
 		// No persistent connection to clean up when shelling out to adb
 	}
