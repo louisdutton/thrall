@@ -158,6 +158,73 @@ describe("thrall", () => {
 		expect(elapsed).toBeGreaterThanOrEqual(150); // Waited for element
 	});
 
+	test("humanType types text character by character", async () => {
+		// Create a textarea on the page
+		await page.evaluate(() => {
+			const ta = document.createElement("textarea");
+			ta.id = "human-type-test";
+			document.body.appendChild(ta);
+		});
+
+		await page.humanType("#human-type-test", "Hello World", { delay: 10 });
+
+		const value = await page.evaluate(() => {
+			const ta = document.querySelector(
+				"#human-type-test",
+			) as HTMLTextAreaElement;
+			return ta.value;
+		});
+		expect(value).toBe("Hello World");
+
+		// Clean up
+		await page.evaluate(() => {
+			document.querySelector("#human-type-test")?.remove();
+		});
+	});
+
+	test("humanType dispatches input events for each character", async () => {
+		await page.evaluate(() => {
+			const ta = document.createElement("textarea");
+			ta.id = "human-type-events";
+			(window as any).__inputCount = 0;
+			ta.addEventListener("input", () => {
+				(window as any).__inputCount++;
+			});
+			document.body.appendChild(ta);
+		});
+
+		await page.humanType("#human-type-events", "ABCDE", { delay: 10 });
+
+		const inputCount = await page.evaluate(() => (window as any).__inputCount);
+		expect(inputCount).toBe(5);
+
+		// Clean up
+		await page.evaluate(() => {
+			document.querySelector("#human-type-events")?.remove();
+			delete (window as any).__inputCount;
+		});
+	});
+
+	test("humanType takes approximately delay * length ms", async () => {
+		await page.evaluate(() => {
+			const ta = document.createElement("textarea");
+			ta.id = "human-type-timing";
+			document.body.appendChild(ta);
+		});
+
+		const start = Date.now();
+		await page.humanType("#human-type-timing", "12345", { delay: 50 });
+		const elapsed = Date.now() - start;
+
+		// 5 chars * 50ms = 250ms minimum
+		expect(elapsed).toBeGreaterThanOrEqual(200);
+
+		// Clean up
+		await page.evaluate(() => {
+			document.querySelector("#human-type-timing")?.remove();
+		});
+	});
+
 	test("getByRole auto-waits for element to appear", async () => {
 		// Inject button after 200ms delay
 		page.evaluate(() => {
