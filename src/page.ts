@@ -197,6 +197,15 @@ export class Page {
 		await element.fill(value);
 	}
 
+	async humanType(
+		selector: string,
+		text: string,
+		options: { delay?: number } = {},
+	): Promise<void> {
+		const element = await this.waitForSelector(selector, { visible: true });
+		await element.humanType(text, options);
+	}
+
 	async evaluate<T>(
 		fn: string | ((...args: any[]) => T),
 		...args: any[]
