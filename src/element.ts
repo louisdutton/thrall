@@ -56,34 +56,21 @@ export class ElementHandle {
 		const { delay = 40 } = options;
 		await this.focus();
 
-		// Clear existing content
+		// Run the entire typing loop inside the browser to avoid
+		// CDP round-trips per character and stale nodeId issues
 		await this.cdp.send("Runtime.callFunctionOn", {
 			objectId: await this.getObjectId(),
-			functionDeclaration: `function() { this.value = ''; }`,
-		});
-
-		// Type character by character, setting value and dispatching input event
-		for (let i = 0; i < text.length; i++) {
-			const partial = text.slice(0, i + 1);
-			await this.cdp.send("Runtime.callFunctionOn", {
-				objectId: await this.getObjectId(),
-				functionDeclaration: `function(v) {
-					this.value = v;
+			functionDeclaration: `async function(text, delay) {
+				this.value = '';
+				for (let i = 0; i < text.length; i++) {
+					this.value = text.slice(0, i + 1);
 					this.dispatchEvent(new Event('input', { bubbles: true }));
-				}`,
-				arguments: [{ value: partial }],
-			});
-			if (delay > 0) {
-				await Bun.sleep(delay);
-			}
-		}
-
-		// Final change event
-		await this.cdp.send("Runtime.callFunctionOn", {
-			objectId: await this.getObjectId(),
-			functionDeclaration: `function() {
+					await new Promise(r => setTimeout(r, delay));
+				}
 				this.dispatchEvent(new Event('change', { bubbles: true }));
 			}`,
+			arguments: [{ value: text }, { value: delay }],
+			awaitPromise: true,
 		});
 	}
 
