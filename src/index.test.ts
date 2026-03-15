@@ -225,6 +225,60 @@ describe("thrall", () => {
 		});
 	});
 
+	test("mouse.smoothWheel scrolls over duration", async () => {
+		await page.evaluate(() => {
+			const div = document.createElement("div");
+			div.id = "smooth-scroll-test";
+			div.style.cssText = "width:200px;height:100px;overflow:auto;";
+			div.innerHTML = '<div style="height:1000px">tall content</div>';
+			document.body.appendChild(div);
+		});
+
+		// Move mouse over the element, then smooth scroll
+		const el = await page.waitForSelector("#smooth-scroll-test", {
+			visible: true,
+		});
+		const box = await el.boundingBox();
+		expect(box).not.toBeNull();
+		await page.mouse.move(box!.x + 100, box!.y + 50);
+
+		const start = Date.now();
+		await page.mouse.smoothWheel(300, { duration: 500 });
+		const elapsed = Date.now() - start;
+
+		expect(elapsed).toBeGreaterThanOrEqual(400);
+
+		const scrollTop = await page.evaluate(() => {
+			return document.querySelector("#smooth-scroll-test")!.scrollTop;
+		});
+		expect(scrollTop).toBeGreaterThan(0);
+
+		await page.evaluate(() => {
+			document.querySelector("#smooth-scroll-test")?.remove();
+		});
+	});
+
+	test("page.smoothScroll scrolls within element", async () => {
+		await page.evaluate(() => {
+			const div = document.createElement("div");
+			div.id = "page-smooth-scroll-test";
+			div.style.cssText = "width:200px;height:100px;overflow:auto;";
+			div.innerHTML = '<div style="height:1000px">tall content</div>';
+			document.body.appendChild(div);
+		});
+
+		await page.smoothScroll("#page-smooth-scroll-test", 200, { duration: 300 });
+
+		const scrollTop = await page.evaluate(() => {
+			return document.querySelector("#page-smooth-scroll-test")!.scrollTop;
+		});
+		expect(scrollTop).toBeGreaterThan(0);
+
+		await page.evaluate(() => {
+			document.querySelector("#page-smooth-scroll-test")?.remove();
+		});
+	});
+
 	test("getByRole auto-waits for element to appear", async () => {
 		// Inject button after 200ms delay
 		page.evaluate(() => {

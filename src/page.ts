@@ -740,6 +740,26 @@ export class Page {
 	}
 
 	/**
+	 * Smooth scroll within an element by dispatching wheel events over a duration.
+	 * Moves the mouse to the element's center first, then scrolls.
+	 * @param selector - CSS selector of the element to scroll within
+	 * @param deltaY - Total vertical scroll distance (positive = down)
+	 * @param options.duration - Duration in ms (default: 1000)
+	 */
+	async smoothScroll(
+		selector: string,
+		deltaY: number,
+		options: { duration?: number } = {},
+	): Promise<void> {
+		const element = await this.waitForSelector(selector, { visible: true });
+		const box = await element.boundingBox();
+		if (!box) throw new Error("Element is not visible");
+		// Move mouse to center of element
+		await this.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+		await this.mouse.smoothWheel(deltaY, options);
+	}
+
+	/**
 	 * Start a screencast recording session.
 	 * Returns a Screencast instance that can be used to stop recording and save the video.
 	 */

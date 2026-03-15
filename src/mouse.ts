@@ -105,4 +105,26 @@ export class Mouse {
 			deltaY,
 		});
 	}
+
+	/**
+	 * Smooth scroll by dispatching wheel events over a duration.
+	 * @param deltaY - Total vertical scroll distance (positive = down)
+	 * @param options.deltaX - Total horizontal scroll distance
+	 * @param options.duration - Duration in ms (default: 1000)
+	 */
+	async smoothWheel(
+		deltaY: number,
+		options: { deltaX?: number; duration?: number } = {},
+	): Promise<void> {
+		const { deltaX = 0, duration = 1000 } = options;
+		const interval = 16; // ~60fps
+		const steps = Math.max(1, Math.round(duration / interval));
+		const stepDeltaX = deltaX / steps;
+		const stepDeltaY = deltaY / steps;
+
+		for (let i = 0; i < steps; i++) {
+			await this.wheel({ deltaX: stepDeltaX, deltaY: stepDeltaY });
+			await Bun.sleep(interval);
+		}
+	}
 }
