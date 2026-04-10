@@ -1,6 +1,6 @@
 {
 	"name": "thrall",
-	"version": "0.2.0",
+	"version": "0.6.0",
 	"description": "Lightweight Chromium and Android automation for Bun",
 	"main": "src/index.ts",
 	"type": "module",
