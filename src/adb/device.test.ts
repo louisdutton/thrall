@@ -1,10 +1,10 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Device } from "./device";
 import {
-	parseHierarchy,
-	parseBounds,
-	findMatch,
 	findAllMatches,
+	findMatch,
+	parseBounds,
+	parseHierarchy,
 	type UINode,
 } from "./element";
 

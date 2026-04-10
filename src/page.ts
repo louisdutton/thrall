@@ -1,16 +1,14 @@
 /**
- * Page - represents a browser tab
+ * Page - represents a browser tab backed by Bun.WebView
  */
 
-import { CDPSession } from "./cdp";
-import { ElementHandle } from "./element";
+import { ElementHandle, type EvalFn } from "./element";
 import { Keyboard } from "./keyboard";
 import { Mouse } from "./mouse";
-import { Screencast } from "./screencast";
+import { Screencast, type ScreencastOptions } from "./screencast";
 
 interface NavigateOptions {
 	timeout?: number;
-	waitUntil?: "load" | "domcontentloaded" | "networkidle";
 }
 
 interface WaitForSelectorOptions {
@@ -26,134 +24,93 @@ interface ScreenshotOptions {
 	quality?: number;
 }
 
-interface ScreencastOptions {
-	/** Image format for frames */
-	format?: "jpeg" | "png";
-	/** JPEG quality (0-100) */
-	quality?: number;
-	/** Maximum width of frames */
-	maxWidth?: number;
-	/** Maximum height of frames */
-	maxHeight?: number;
-	/** Capture every Nth frame (1 = all frames) */
-	everyNthFrame?: number;
-}
-
 export class Page {
-	private cdp: CDPSession;
-	private targetId: string | null = null;
-
+	readonly view: InstanceType<typeof Bun.WebView>;
 	readonly keyboard: Keyboard;
 	readonly mouse: Mouse;
+	private _evalQueue: Promise<unknown> = Promise.resolve();
 
-	private constructor(cdp: CDPSession) {
-		this.cdp = cdp;
-		this.keyboard = new Keyboard(cdp);
-		this.mouse = new Mouse(cdp);
+	constructor(view: InstanceType<typeof Bun.WebView>) {
+		this.view = view;
+		this.keyboard = new Keyboard(view, this._enqueue.bind(this));
+		this.mouse = new Mouse(view, this._enqueue.bind(this));
 	}
 
-	static async create(wsUrl: string): Promise<Page> {
-		const cdp = new CDPSession(wsUrl);
-		const page = new Page(cdp);
+	/**
+	 * Serialize all view.evaluate() calls to avoid "already pending" errors.
+	 */
+	private _eval<T>(expression: string): Promise<T> {
+		return this._enqueue(expression);
+	}
 
-		// Enable necessary domains
-		await Promise.all([
-			cdp.send("Page.enable"),
-			cdp.send("Runtime.enable"),
-			cdp.send("DOM.enable"),
-			cdp.send("Network.enable"),
-		]);
-
-		return page;
+	/** Shared evaluation queue - also used by Keyboard, Mouse, Element */
+	_enqueue<T>(expression: string): Promise<T> {
+		const next = this._evalQueue.then(
+			() => this.view.evaluate(expression) as Promise<T>,
+			() => this.view.evaluate(expression) as Promise<T>,
+		);
+		this._evalQueue = next.then(
+			() => {},
+			() => {},
+		);
+		return next;
 	}
 
 	async goto(url: string, options: NavigateOptions = {}): Promise<void> {
-		const { timeout = 30000, waitUntil = "load" } = options;
-
-		const eventName =
-			waitUntil === "domcontentloaded"
-				? "Page.domContentEventFired"
-				: "Page.loadEventFired";
-
-		let timer: Timer;
-
-		const loadPromise = new Promise<void>((resolve) => {
-			const handler = () => {
-				this.cdp.off(eventName, handler);
-				resolve();
-			};
-			this.cdp.on(eventName, handler);
-		});
-
-		await this.cdp.send("Page.navigate", { url });
+		const { timeout = 30000 } = options;
 
 		const timeoutPromise = new Promise<never>((_, reject) => {
-			timer = setTimeout(
+			setTimeout(
 				() => reject(new Error(`Navigation timeout after ${timeout}ms`)),
 				timeout,
 			);
 		});
 
-		try {
-			await Promise.race([loadPromise, timeoutPromise]);
-		} finally {
-			clearTimeout(timer!);
+		await Promise.race([this.view.navigate(url), timeoutPromise]);
+
+		// Wait for the page to finish loading and document to be ready
+		const start = Date.now();
+		while (Date.now() - start < timeout) {
+			if (!this.view.loading) {
+				const ready = await this._eval<string>("document.readyState");
+				if (ready === "complete" || ready === "interactive") return;
+			}
+			await Bun.sleep(50);
 		}
 	}
 
 	async content(): Promise<string> {
-		const result = await this.cdp.send<{ result: { value: string } }>(
-			"Runtime.evaluate",
-			{ expression: "document.documentElement.outerHTML" },
-		);
-		return result.result.value;
+		return this._eval<string>("document.documentElement.outerHTML");
 	}
 
 	async title(): Promise<string> {
-		const result = await this.cdp.send<{ result: { value: string } }>(
-			"Runtime.evaluate",
-			{ expression: "document.title" },
-		);
-		return result.result.value;
+		return this._eval<string>("document.title");
 	}
 
 	async url(): Promise<string> {
-		const result = await this.cdp.send<{ result: { value: string } }>(
-			"Runtime.evaluate",
-			{ expression: "window.location.href" },
-		);
-		return result.result.value;
+		return this.view.url;
 	}
 
 	async $(selector: string): Promise<ElementHandle | null> {
-		const { root } = await this.cdp.send<{ root: { nodeId: number } }>(
-			"DOM.getDocument",
+		const exists = await this._eval<boolean>(
+			`document.querySelector(${JSON.stringify(selector)}) !== null`,
 		);
-		const { nodeId } = await this.cdp.send<{ nodeId: number }>(
-			"DOM.querySelector",
-			{
-				nodeId: root.nodeId,
-				selector,
-			},
-		);
-
-		if (nodeId === 0) return null;
-		return new ElementHandle(this.cdp, nodeId);
+		if (!exists) return null;
+		return new ElementHandle(this.view, selector, 0, this._enqueue.bind(this));
 	}
 
 	async $$(selector: string): Promise<ElementHandle[]> {
-		const { root } = await this.cdp.send<{ root: { nodeId: number } }>(
-			"DOM.getDocument",
-		);
-		const { nodeIds } = await this.cdp.send<{ nodeIds: number[] }>(
-			"DOM.querySelectorAll",
-			{
-				nodeId: root.nodeId,
-				selector,
-			},
+		const count = await this._eval<number>(
+			`document.querySelectorAll(${JSON.stringify(selector)}).length`,
 		);
 
-		return nodeIds.map((nodeId) => new ElementHandle(this.cdp, nodeId));
+		const elements: ElementHandle[] = [];
+		for (let i = 0; i < count; i++) {
+			elements.push(
+				new ElementHandle(this.view, selector, i, this._enqueue.bind(this)),
+			);
+		}
+		return elements;
 	}
 
 	async waitForSelector(
@@ -168,12 +125,12 @@ export class Page {
 
 			if (hidden) {
 				if (!element) return element as unknown as ElementHandle;
-				const isVisible = await element.isVisible();
-				if (!isVisible) return element;
+				const isVis = await element.isVisible();
+				if (!isVis) return element;
 			} else if (element) {
 				if (!visible) return element;
-				const isVisible = await element.isVisible();
-				if (isVisible) return element;
+				const isVis = await element.isVisible();
+				if (isVis) return element;
 			}
 
 			await Bun.sleep(100);
@@ -183,18 +140,27 @@ export class Page {
 	}
 
 	async click(selector: string): Promise<void> {
-		const element = await this.waitForSelector(selector, { visible: true });
-		await element.click();
+		await this.view.click(selector);
 	}
 
 	async type(selector: string, text: string): Promise<void> {
-		const element = await this.waitForSelector(selector, { visible: true });
-		await element.type(text);
+		await this.view.click(selector);
+		await this.view.type(text);
 	}
 
 	async fill(selector: string, value: string): Promise<void> {
-		const element = await this.waitForSelector(selector, { visible: true });
-		await element.fill(value);
+		await this.view.click(selector);
+		await this._eval<void>(
+			`(() => { const el = document.querySelector(${JSON.stringify(selector)}); el.value = ''; })()`,
+		);
+		await this._eval<void>(
+			`(() => {
+				const el = document.querySelector(${JSON.stringify(selector)});
+				el.value = ${JSON.stringify(value)};
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+				el.dispatchEvent(new Event('change', { bubbles: true }));
+			})()`,
+		);
 	}
 
 	async humanType(
@@ -202,8 +168,23 @@ export class Page {
 		text: string,
 		options: { delay?: number } = {},
 	): Promise<void> {
-		const element = await this.waitForSelector(selector, { visible: true });
-		await element.humanType(text, options);
+		const { delay = 40 } = options;
+		await this.view.click(selector);
+
+		await this._eval<void>(
+			`(async () => {
+				const el = document.querySelector(${JSON.stringify(selector)});
+				el.value = '';
+				const text = ${JSON.stringify(text)};
+				const delay = ${delay};
+				for (let i = 0; i < text.length; i++) {
+					el.value = text.slice(0, i + 1);
+					el.dispatchEvent(new Event('input', { bubbles: true }));
+					await new Promise(r => setTimeout(r, delay));
+				}
+				el.dispatchEvent(new Event('change', { bubbles: true }));
+			})()`,
+		);
 	}
 
 	async evaluate<T>(
@@ -215,50 +196,31 @@ export class Page {
 				? fn
 				: `(${fn.toString()})(${args.map((a) => JSON.stringify(a)).join(",")})`;
 
-		const result = await this.cdp.send<{
-			result: { value: T };
-			exceptionDetails?: { exception: { description: string } };
-		}>("Runtime.evaluate", {
-			expression,
-			returnByValue: true,
-			awaitPromise: true,
-		});
-
-		if (result.exceptionDetails) {
-			throw new Error(result.exceptionDetails.exception.description);
-		}
-
-		return result.result.value;
+		return this._eval<T>(expression);
 	}
 
 	async screenshot(options: ScreenshotOptions = {}): Promise<Buffer> {
-		const { fullPage = false, type = "png", quality } = options;
+		const { type = "png", quality } = options;
 
-		if (fullPage) {
-			const metrics = await this.cdp.send<{
-				contentSize: { width: number; height: number };
-			}>("Page.getLayoutMetrics");
-			await this.cdp.send("Emulation.setDeviceMetricsOverride", {
-				width: Math.ceil(metrics.contentSize.width),
-				height: Math.ceil(metrics.contentSize.height),
-				deviceScaleFactor: 1,
-				mobile: false,
-			});
+		if (options.fullPage) {
+			// Scroll to capture full page height by expanding the viewport temporarily
+			const dimensions = await this._eval<{ width: number; height: number }>(
+				`({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight })`,
+			);
+			await this.view.resize(dimensions.width, dimensions.height);
 		}
 
-		const result = await this.cdp.send<{ data: string }>(
-			"Page.captureScreenshot",
-			{
-				format: type,
-				quality: type === "jpeg" ? quality : undefined,
-			},
-		);
+		const blob = await this.view.screenshot({
+			format: type,
+			quality: type === "jpeg" ? quality : undefined,
+		});
 
-		if (fullPage) {
-			await this.cdp.send("Emulation.clearDeviceMetricsOverride");
+		if (options.fullPage) {
+			// Restore original viewport - no stored dimensions, use reasonable defaults
+			await this.view.resize(1280, 720);
 		}
 
-		const buffer = Buffer.from(result.data, "base64");
+		const buffer = Buffer.from(await blob.arrayBuffer());
 
 		if (options.path) {
 			await Bun.write(options.path, buffer);
@@ -267,10 +229,14 @@ export class Page {
 		return buffer;
 	}
 
+	/**
+	 * Generate a PDF of the page. Requires Chrome backend
+	 * (launch with `executablePath` or set `THRALL_BROWSER`).
+	 */
 	async pdf(options: { path?: string } = {}): Promise<Buffer> {
-		const result = await this.cdp.send<{ data: string }>("Page.printToPDF", {
+		const result = (await this.view.cdp("Page.printToPDF", {
 			printBackground: true,
-		});
+		})) as { data: string };
 
 		const buffer = Buffer.from(result.data, "base64");
 
@@ -282,44 +248,20 @@ export class Page {
 	}
 
 	async setViewport(width: number, height: number): Promise<void> {
-		await this.cdp.send("Emulation.setDeviceMetricsOverride", {
-			width,
-			height,
-			deviceScaleFactor: 1,
-			mobile: false,
-		});
+		await this.view.resize(width, height);
 	}
 
 	async waitForNavigation(options: NavigateOptions = {}): Promise<void> {
-		const { timeout = 30000, waitUntil = "load" } = options;
+		const { timeout = 30000 } = options;
+		const start = Date.now();
 
-		const eventName =
-			waitUntil === "domcontentloaded"
-				? "Page.domContentEventFired"
-				: "Page.loadEventFired";
-
-		let timer: Timer;
-
-		const loadPromise = new Promise<void>((resolve) => {
-			const handler = () => {
-				this.cdp.off(eventName, handler);
-				resolve();
-			};
-			this.cdp.on(eventName, handler);
-		});
-
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => reject(new Error(`Navigation timeout after ${timeout}ms`)),
-				timeout,
-			);
-		});
-
-		try {
-			await Promise.race([loadPromise, timeoutPromise]);
-		} finally {
-			clearTimeout(timer!);
+		// Poll view.loading until the page finishes loading
+		while (Date.now() - start < timeout) {
+			if (!this.view.loading) return;
+			await Bun.sleep(50);
 		}
+
+		throw new Error(`Navigation timeout after ${timeout}ms`);
 	}
 
 	async waitForFunction<T>(
@@ -331,15 +273,8 @@ export class Page {
 		const start = Date.now();
 
 		while (Date.now() - start < timeout) {
-			const result = await this.cdp.send<{ result: { value: T } }>(
-				"Runtime.evaluate",
-				{ expression, returnByValue: true },
-			);
-
-			if (result.result.value) {
-				return result.result.value;
-			}
-
+			const result = await this._eval<T>(expression);
+			if (result) return result as T;
 			await Bun.sleep(polling);
 		}
 
@@ -352,39 +287,49 @@ export class Page {
 	): Promise<{ url: string; status: number; headers: Record<string, string> }> {
 		const { timeout = 30000 } = options;
 
-		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
-				this.cdp.off("Network.responseReceived", handler);
-				reject(new Error("Timeout waiting for response"));
-			}, timeout);
+		// Install a fetch/XHR observer in the page
+		const id = `__thrall_resp_${Date.now()}`;
+		const predicateJs =
+			typeof urlOrPredicate === "string"
+				? `url.includes(${JSON.stringify(urlOrPredicate)})`
+				: urlOrPredicate instanceof RegExp
+					? `${urlOrPredicate}.test(url)`
+					: `(${urlOrPredicate.toString()})(url)`;
 
-			const handler = (params: {
-				response: {
-					url: string;
-					status: number;
-					headers: Record<string, string>;
+		await this._eval<void>(
+			`(() => {
+				window.${id} = null;
+				const origFetch = window.fetch;
+				window.fetch = async function(...args) {
+					const resp = await origFetch.apply(this, args);
+					const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+					if (${predicateJs}) {
+						const headers = {};
+						resp.headers.forEach((v, k) => { headers[k] = v; });
+						window.${id} = { url, status: resp.status, headers };
+					}
+					return resp;
 				};
-			}) => {
-				const { url, status, headers } = params.response;
-				let matches = false;
+			})()`,
+		);
 
-				if (typeof urlOrPredicate === "string") {
-					matches = url.includes(urlOrPredicate);
-				} else if (urlOrPredicate instanceof RegExp) {
-					matches = urlOrPredicate.test(url);
-				} else {
-					matches = urlOrPredicate(url);
-				}
+		const start = Date.now();
+		while (Date.now() - start < timeout) {
+			const result = await this._eval<{
+				url: string;
+				status: number;
+				headers: Record<string, string>;
+			} | null>(`window.${id}`);
+			if (result) {
+				// Clean up
+				await this._eval<void>(`delete window.${id}`);
+				return result;
+			}
+			await Bun.sleep(50);
+		}
 
-				if (matches) {
-					clearTimeout(timer);
-					this.cdp.off("Network.responseReceived", handler);
-					resolve({ url, status, headers });
-				}
-			};
-
-			this.cdp.on("Network.responseReceived", handler);
-		});
+		await this._eval<void>(`delete window.${id}`);
+		throw new Error("Timeout waiting for response");
 	}
 
 	async waitForRequest(
@@ -393,142 +338,101 @@ export class Page {
 	): Promise<{ url: string; method: string }> {
 		const { timeout = 30000 } = options;
 
-		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
-				this.cdp.off("Network.requestWillBeSent", handler);
-				reject(new Error("Timeout waiting for request"));
-			}, timeout);
+		const id = `__thrall_req_${Date.now()}`;
+		const predicateJs =
+			typeof urlOrPredicate === "string"
+				? `url.includes(${JSON.stringify(urlOrPredicate)})`
+				: urlOrPredicate instanceof RegExp
+					? `${urlOrPredicate}.test(url)`
+					: `(${urlOrPredicate.toString()})(url)`;
 
-			const handler = (params: {
-				request: { url: string; method: string };
-			}) => {
-				const { url, method } = params.request;
-				let matches = false;
+		await this._eval<void>(
+			`(() => {
+				window.${id} = null;
+				const origFetch = window.fetch;
+				window.fetch = async function(...args) {
+					const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+					const method = args[1]?.method || 'GET';
+					if (${predicateJs}) {
+						window.${id} = { url, method };
+					}
+					return origFetch.apply(this, args);
+				};
+			})()`,
+		);
 
-				if (typeof urlOrPredicate === "string") {
-					matches = url.includes(urlOrPredicate);
-				} else if (urlOrPredicate instanceof RegExp) {
-					matches = urlOrPredicate.test(url);
-				} else {
-					matches = urlOrPredicate(url);
-				}
+		const start = Date.now();
+		while (Date.now() - start < timeout) {
+			const result = await this._eval<{ url: string; method: string } | null>(
+				`window.${id}`,
+			);
+			if (result) {
+				await this._eval<void>(`delete window.${id}`);
+				return result;
+			}
+			await Bun.sleep(50);
+		}
 
-				if (matches) {
-					clearTimeout(timer);
-					this.cdp.off("Network.requestWillBeSent", handler);
-					resolve({ url, method });
-				}
-			};
-
-			this.cdp.on("Network.requestWillBeSent", handler);
-		});
+		await this._eval<void>(`delete window.${id}`);
+		throw new Error("Timeout waiting for request");
 	}
 
 	async reload(options: NavigateOptions = {}): Promise<void> {
-		const { timeout = 30000, waitUntil = "load" } = options;
-
-		const eventName =
-			waitUntil === "domcontentloaded"
-				? "Page.domContentEventFired"
-				: "Page.loadEventFired";
-
-		let timer: Timer;
-
-		const loadPromise = new Promise<void>((resolve) => {
-			const handler = () => {
-				this.cdp.off(eventName, handler);
-				resolve();
-			};
-			this.cdp.on(eventName, handler);
-		});
-
-		await this.cdp.send("Page.reload");
-
-		const timeoutPromise = new Promise<never>((_, reject) => {
-			timer = setTimeout(
-				() => reject(new Error(`Reload timeout after ${timeout}ms`)),
-				timeout,
-			);
-		});
-
-		try {
-			await Promise.race([loadPromise, timeoutPromise]);
-		} finally {
-			clearTimeout(timer!);
-		}
+		await this.view.reload();
+		await this.waitForNavigation(options);
 	}
 
 	async goBack(options: NavigateOptions = {}): Promise<void> {
-		const history = await this.cdp.send<{
-			currentIndex: number;
-			entries: { id: number }[];
-		}>("Page.getNavigationHistory");
-
-		if (history.currentIndex > 0) {
-			const entryId = history.entries[history.currentIndex - 1]!.id;
-			await this.cdp.send("Page.navigateToHistoryEntry", { entryId });
-			await this.waitForNavigation(options);
-		}
+		await this.view.goBack();
+		await this.waitForNavigation(options);
 	}
 
 	async goForward(options: NavigateOptions = {}): Promise<void> {
-		const history = await this.cdp.send<{
-			currentIndex: number;
-			entries: { id: number }[];
-		}>("Page.getNavigationHistory");
-
-		if (history.currentIndex < history.entries.length - 1) {
-			const entryId = history.entries[history.currentIndex + 1]!.id;
-			await this.cdp.send("Page.navigateToHistoryEntry", { entryId });
-			await this.waitForNavigation(options);
-		}
+		await this.view.goForward();
+		await this.waitForNavigation(options);
 	}
 
 	async setCookie(
 		...cookies: Array<{
 			name: string;
 			value: string;
-			url?: string;
 			domain?: string;
 			path?: string;
 			secure?: boolean;
-			httpOnly?: boolean;
 			sameSite?: "Strict" | "Lax" | "None";
 			expires?: number;
 		}>
 	): Promise<void> {
-		await this.cdp.send("Network.setCookies", { cookies });
+		for (const cookie of cookies) {
+			let cookieStr = `${encodeURIComponent(cookie.name)}=${encodeURIComponent(cookie.value)}`;
+			if (cookie.path) cookieStr += `; path=${cookie.path}`;
+			if (cookie.domain) cookieStr += `; domain=${cookie.domain}`;
+			if (cookie.secure) cookieStr += "; secure";
+			if (cookie.sameSite) cookieStr += `; samesite=${cookie.sameSite}`;
+			if (cookie.expires)
+				cookieStr += `; expires=${new Date(cookie.expires * 1000).toUTCString()}`;
+			await this._eval<void>(`document.cookie = ${JSON.stringify(cookieStr)}`);
+		}
 	}
 
-	async cookies(urls?: string[]): Promise<
+	async cookies(): Promise<
 		Array<{
 			name: string;
 			value: string;
-			domain: string;
-			path: string;
-			expires: number;
-			httpOnly: boolean;
-			secure: boolean;
-			sameSite: string;
 		}>
 	> {
-		const result = await this.cdp.send<{
-			cookies: Array<{
-				name: string;
-				value: string;
-				domain: string;
-				path: string;
-				expires: number;
-				httpOnly: boolean;
-				secure: boolean;
-				sameSite: string;
-			}>;
-		}>("Network.getCookies", urls ? { urls } : {});
-		return result.cookies;
+		return this._eval<Array<{ name: string; value: string }>>(
+			`document.cookie.split('; ').filter(Boolean).map(c => {
+				const [name, ...rest] = c.split('=');
+				return { name: decodeURIComponent(name), value: decodeURIComponent(rest.join('=')) };
+			})`,
+		);
 	}
 
-	async deleteCookie(name: string, url?: string): Promise<void> {
-		await this.cdp.send("Network.deleteCookies", { name, url });
+	async deleteCookie(name: string): Promise<void> {
+		await this._eval<void>(
+			`document.cookie = ${JSON.stringify(encodeURIComponent(name))} + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'`,
+		);
 	}
 
 	async setGeolocation(coords: {
@@ -536,23 +440,33 @@ export class Page {
 		longitude: number;
 		accuracy?: number;
 	}): Promise<void> {
-		await this.cdp.send("Browser.grantPermissions", {
-			permissions: ["geolocation"],
-		});
-		await this.cdp.send("Emulation.setGeolocationOverride", {
-			latitude: coords.latitude,
-			longitude: coords.longitude,
-			accuracy: coords.accuracy ?? 1,
-		});
+		const { latitude, longitude, accuracy = 1 } = coords;
+		await this._eval<void>(
+			`navigator.geolocation.getCurrentPosition = (success) => {
+				success({
+					coords: {
+						latitude: ${latitude}, longitude: ${longitude}, accuracy: ${accuracy},
+						altitude: null, altitudeAccuracy: null, heading: null, speed: null,
+					},
+					timestamp: Date.now(),
+				});
+			};
+			navigator.geolocation.watchPosition = (success) => {
+				success({
+					coords: {
+						latitude: ${latitude}, longitude: ${longitude}, accuracy: ${accuracy},
+						altitude: null, altitudeAccuracy: null, heading: null, speed: null,
+					},
+					timestamp: Date.now(),
+				});
+				return 0;
+			}`,
+		);
 	}
 
 	/**
 	 * Find an element by its text content. Auto-waits until the element is found
 	 * or the timeout is reached.
-	 * @param text - Text to search for (partial match by default)
-	 * @param options.exact - If true, match the full trimmed text exactly
-	 * @param options.timeout - Max time to wait in ms (default: 30000)
-	 * @throws If no matching element is found within the timeout
 	 */
 	async getByText(
 		text: string,
@@ -562,37 +476,48 @@ export class Page {
 		const start = Date.now();
 
 		while (Date.now() - start < timeout) {
-			// Ensure full DOM tree is loaded
-			await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
-
-			const result = await this.cdp.send<{
-				result: { objectId?: string };
-				exceptionDetails?: unknown;
-			}>("Runtime.evaluate", {
-				expression: `(() => {
+			const found = await this._eval<boolean>(
+				`(() => {
 					const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
 					while (walker.nextNode()) {
 						const node = walker.currentNode;
 						const matches = ${exact}
 							? node.textContent?.trim() === ${JSON.stringify(text)}
 							: node.textContent?.includes(${JSON.stringify(text)});
-						if (matches && node.parentElement) {
-							return node.parentElement;
-						}
+						if (matches && node.parentElement) return true;
 					}
-					return null;
+					return false;
 				})()`,
-				returnByValue: false,
-			});
+			);
 
-			if (!result.exceptionDetails && result.result.objectId) {
-				const requestResult = await this.cdp.send<{ nodeId: number }>(
-					"DOM.requestNode",
-					{ objectId: result.result.objectId },
+			if (found) {
+				// Build a selector-like reference for the element
+				// We use a data attribute approach: tag the element so we can find it
+				const tagged = await this._eval<string | null>(
+					`(() => {
+						const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+						while (walker.nextNode()) {
+							const node = walker.currentNode;
+							const matches = ${exact}
+								? node.textContent?.trim() === ${JSON.stringify(text)}
+								: node.textContent?.includes(${JSON.stringify(text)});
+							if (matches && node.parentElement) {
+								const id = '__thrall_' + Math.random().toString(36).slice(2);
+								node.parentElement.setAttribute('data-thrall-id', id);
+								return id;
+							}
+						}
+						return null;
+					})()`,
 				);
 
-				if (requestResult.nodeId) {
-					return new ElementHandle(this.cdp, requestResult.nodeId);
+				if (tagged) {
+					return new ElementHandle(
+						this.view,
+						`[data-thrall-id="${tagged}"]`,
+						0,
+						this._enqueue.bind(this),
+					);
 				}
 			}
 
@@ -603,10 +528,7 @@ export class Page {
 	}
 
 	/**
-	 * Find all elements matching the given text content. Returns immediately
-	 * with all current matches (may be an empty array).
-	 * @param text - Text to search for (partial match by default)
-	 * @param options.exact - If true, match the full trimmed text exactly
+	 * Find all elements matching the given text content.
 	 */
 	async getAllByText(
 		text: string,
@@ -614,78 +536,39 @@ export class Page {
 	): Promise<ElementHandle[]> {
 		const { exact = false } = options;
 
-		// Ensure full DOM tree is loaded
-		await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
-
-		// Find all matches, get count first
-		const countResult = await this.cdp.send<{
-			result: { value: number };
-			exceptionDetails?: unknown;
-		}>("Runtime.evaluate", {
-			expression: `(() => {
-				let count = 0;
+		const ids = await this._eval<string[]>(
+			`(() => {
+				const ids = [];
 				const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
 				while (walker.nextNode()) {
 					const node = walker.currentNode;
 					const matches = ${exact}
 						? node.textContent?.trim() === ${JSON.stringify(text)}
 						: node.textContent?.includes(${JSON.stringify(text)});
-					if (matches && node.parentElement) count++;
-				}
-				return count;
-			})()`,
-			returnByValue: true,
-		});
-
-		if (countResult.exceptionDetails || !countResult.result.value) return [];
-
-		// Get each element individually
-		const elements: ElementHandle[] = [];
-		for (let i = 0; i < countResult.result.value; i++) {
-			const result = await this.cdp.send<{
-				result: { objectId?: string };
-				exceptionDetails?: unknown;
-			}>("Runtime.evaluate", {
-				expression: `(() => {
-					let idx = 0;
-					const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-					while (walker.nextNode()) {
-						const node = walker.currentNode;
-						const matches = ${exact}
-							? node.textContent?.trim() === ${JSON.stringify(text)}
-							: node.textContent?.includes(${JSON.stringify(text)});
-						if (matches && node.parentElement) {
-							if (idx === ${i}) return node.parentElement;
-							idx++;
-						}
+					if (matches && node.parentElement) {
+						const id = '__thrall_' + Math.random().toString(36).slice(2);
+						node.parentElement.setAttribute('data-thrall-id', id);
+						ids.push(id);
 					}
-					return null;
-				})()`,
-				returnByValue: false,
-			});
-
-			if (result.result.objectId) {
-				const requestResult = await this.cdp.send<{ nodeId: number }>(
-					"DOM.requestNode",
-					{ objectId: result.result.objectId },
-				);
-				if (requestResult.nodeId) {
-					elements.push(new ElementHandle(this.cdp, requestResult.nodeId));
 				}
-			}
-		}
+				return ids;
+			})()`,
+		);
 
-		return elements;
+		if (!ids || ids.length === 0) return [];
+		return ids.map(
+			(id) =>
+				new ElementHandle(
+					this.view,
+					`[data-thrall-id="${id}"]`,
+					0,
+					this._enqueue.bind(this),
+				),
+		);
 	}
 
 	/**
-	 * Find an element by its ARIA role. Supports both explicit roles and implicit
-	 * roles (e.g. button, link, textbox, checkbox, radio, heading). Auto-waits
-	 * until the element is found or the timeout is reached.
-	 * @param role - ARIA role to search for
-	 * @param options.name - Filter by accessible name (aria-label or text content)
-	 * @param options.timeout - Max time to wait in ms (default: 30000)
-	 * @throws If no matching element is found within the timeout
+	 * Find an element by its ARIA role. Auto-waits until the element is found.
 	 */
 	async getByRole(
 		role: string,
@@ -694,7 +577,6 @@ export class Page {
 		const { name, timeout = 30000 } = options;
 		const start = Date.now();
 
-		// Build selector for explicit role + implicit roles
 		const implicit: Record<string, string> = {
 			button: 'button, input[type="button"], input[type="submit"]',
 			link: "a[href]",
@@ -711,22 +593,16 @@ export class Page {
 		const combinedSelector = selectors.join(", ");
 
 		while (Date.now() - start < timeout) {
-			// If no name filter, use simple querySelector
 			if (!name) {
 				const element = await this.$(combinedSelector);
 				if (element) return element;
 			} else {
-				// With name filter, get all candidates and filter
 				const candidates = await this.$$(combinedSelector);
 				for (const element of candidates) {
 					const ariaLabel = await element.getAttribute("aria-label");
-					if (ariaLabel?.includes(name)) {
-						return element;
-					}
+					if (ariaLabel?.includes(name)) return element;
 					const textContent = await element.textContent();
-					if (textContent?.includes(name)) {
-						return element;
-					}
+					if (textContent?.includes(name)) return element;
 				}
 			}
 
@@ -740,60 +616,58 @@ export class Page {
 	}
 
 	/**
-	 * Smooth scroll within an element by dispatching wheel events over a duration.
-	 * Moves the mouse to the element's center first, then scrolls.
-	 * @param selector - CSS selector of the element to scroll within
-	 * @param deltaY - Total vertical scroll distance (positive = down)
-	 * @param options.duration - Duration in ms (default: 1000)
+	 * Smooth scroll within an element by dispatching scroll events.
 	 */
 	async smoothScroll(
 		selector: string,
 		deltaY: number,
 		options: { duration?: number } = {},
 	): Promise<void> {
-		const element = await this.waitForSelector(selector, { visible: true });
-		const box = await element.boundingBox();
-		if (!box) throw new Error("Element is not visible");
-		// Move mouse to center of element
-		await this.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-		await this.mouse.smoothWheel(deltaY, options);
+		const { duration = 1000 } = options;
+		const interval = 16;
+		const steps = Math.max(1, Math.round(duration / interval));
+		const stepDelta = deltaY / steps;
+
+		for (let i = 0; i < steps; i++) {
+			await this._eval<void>(
+				`(() => {
+					const el = document.querySelector(${JSON.stringify(selector)});
+					if (el) el.scrollTop += ${stepDelta};
+				})()`,
+			);
+			await Bun.sleep(interval);
+		}
 	}
 
 	/**
 	 * Start a screencast recording session.
-	 * Returns a Screencast instance that can be used to stop recording and save the video.
 	 */
 	async startScreencast(options: ScreencastOptions = {}): Promise<Screencast> {
-		const screencast = new Screencast(this.cdp, options);
+		const screencast = new Screencast(this.view, options);
 		await screencast.start();
 		return screencast;
 	}
 
 	/**
-	 * Set files on a file input element, identified by CSS selector.
-	 * Uses CDP DOM.setFileInputFiles to programmatically set files.
-	 * @param selector - CSS selector for the input[type="file"] element
-	 * @param files - Array of absolute file paths to set
+	 * Set files on a file input element. Requires Chrome backend
+	 * (launch with `executablePath` or set `THRALL_BROWSER`).
 	 */
 	async setInputFiles(selector: string, files: string[]): Promise<void> {
-		await this.cdp.send("DOM.getDocument", { depth: -1, pierce: true });
-		const { nodeId } = await this.cdp.send<{ nodeId: number }>(
-			"DOM.querySelector",
-			{
-				nodeId: (
-					await this.cdp.send<{ root: { nodeId: number } }>(
-						"DOM.getDocument",
-						{},
-					)
-				).root.nodeId,
-				selector,
-			},
-		);
-		if (!nodeId) throw new Error(`File input not found: ${selector}`);
-		await this.cdp.send("DOM.setFileInputFiles", { files, nodeId });
+		const nodeId = (await this.view.cdp("DOM.getDocument", {})) as any;
+		const root = nodeId.root.nodeId;
+		const queryResult = (await this.view.cdp("DOM.querySelector", {
+			nodeId: root,
+			selector,
+		})) as { nodeId: number };
+		if (!queryResult.nodeId)
+			throw new Error(`File input not found: ${selector}`);
+		await this.view.cdp("DOM.setFileInputFiles", {
+			files,
+			nodeId: queryResult.nodeId,
+		});
 	}
 
 	async close(): Promise<void> {
-		await this.cdp.close();
+		(this.view as any)[Symbol.dispose]?.();
 	}
 }

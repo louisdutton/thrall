@@ -20,9 +20,12 @@ export type ElementMatcher = {
 	exact?: boolean;
 };
 
-export function parseBounds(
-	boundsStr: string,
-): { x1: number; y1: number; x2: number; y2: number } {
+export function parseBounds(boundsStr: string): {
+	x1: number;
+	y1: number;
+	x2: number;
+	y2: number;
+} {
 	const match = boundsStr.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
 	if (!match) return { x1: 0, y1: 0, x2: 0, y2: 0 };
 	return {

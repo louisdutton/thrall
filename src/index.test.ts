@@ -6,7 +6,7 @@ describe("thrall", () => {
 	let page: Page;
 
 	beforeAll(async () => {
-		browser = await launch({ headless: true });
+		browser = await launch();
 		page = await browser.newPage();
 	}, 15000);
 

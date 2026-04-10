@@ -1,6 +1,6 @@
 import { launch } from "../../src/index";
 
-const browser = await launch({ headless: true });
+const browser = await launch();
 const page = await browser.newPage();
 
 // Navigate to a page

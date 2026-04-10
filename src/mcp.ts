@@ -24,12 +24,7 @@ const TOOLS = [
 		description: "Launch browser. Call this first.",
 		inputSchema: {
 			type: "object",
-			properties: {
-				headless: {
-					type: "boolean",
-					description: "Run headless (default: true)",
-				},
-			},
+			properties: {},
 		},
 	},
 	{
@@ -256,9 +251,7 @@ class MCPServer {
 		switch (name) {
 			case "launch": {
 				if (this.browser) await this.browser.close();
-				this.browser = await launch({
-					headless: (args.headless as boolean) ?? true,
-				});
+				this.browser = await launch();
 				this.page = await this.browser.newPage();
 				return { content: [{ type: "text", text: "Browser launched" }] };
 			}

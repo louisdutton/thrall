@@ -1,11 +1,11 @@
-import { test, expect, beforeAll, afterAll } from "bun:test";
-import { launch, Browser, Page, Screencast } from "./index";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { type Browser, launch, type Page, Screencast } from "./index";
 
 let browser: Browser;
 let page: Page;
 
 beforeAll(async () => {
-	browser = await launch({ headless: true });
+	browser = await launch();
 	page = await browser.newPage();
 });
 
@@ -49,9 +49,6 @@ test("screencast frame data is valid", async () => {
 	expect(frame.data).toBeInstanceOf(Buffer);
 	expect(frame.data.length).toBeGreaterThan(0);
 	expect(frame.timestamp).toBeGreaterThan(0);
-	expect(frame.metadata).toBeDefined();
-	expect(typeof frame.metadata.deviceWidth).toBe("number");
-	expect(typeof frame.metadata.deviceHeight).toBe("number");
 });
 
 test("screencast frameCount returns correct count", async () => {
@@ -60,9 +57,9 @@ test("screencast frameCount returns correct count", async () => {
 	await page.goto("https://example.com");
 	await Bun.sleep(300);
 
-	const count = screencast.frameCount();
 	const frames = await screencast.stop();
-	expect(count).toBe(frames.length);
+	// After stop, frameCount matches returned frames
+	expect(screencast.frameCount()).toBe(frames.length);
 });
 
 test("screencast throws when starting twice", async () => {

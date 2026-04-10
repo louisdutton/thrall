@@ -1,6 +1,6 @@
 import { launch } from "../../src/index";
 
-const browser = await launch({ headless: false });
+const browser = await launch();
 const page = await browser.newPage();
 
 // Start recording

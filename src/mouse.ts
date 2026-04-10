@@ -1,8 +1,8 @@
 /**
- * Mouse - mouse input handling
+ * Mouse - mouse input handling backed by Bun.WebView
  */
 
-import type { CDPSession } from "./cdp";
+import type { EvalFn } from "./element";
 
 type MouseButton = "left" | "right" | "middle";
 
@@ -11,7 +11,10 @@ export class Mouse {
 	private y = 0;
 	private button: MouseButton = "left";
 
-	constructor(private cdp: CDPSession) {}
+	constructor(
+		private view: InstanceType<typeof Bun.WebView>,
+		private eval_: EvalFn,
+	) {}
 
 	async move(
 		x: number,
@@ -27,11 +30,15 @@ export class Mouse {
 			const currentX = fromX + (x - fromX) * (i / steps);
 			const currentY = fromY + (y - fromY) * (i / steps);
 
-			await this.cdp.send("Input.dispatchMouseEvent", {
-				type: "mouseMoved",
-				x: currentX,
-				y: currentY,
-			});
+			await this.eval_(
+				`(() => {
+					const el = document.elementFromPoint(${currentX}, ${currentY}) || document.body;
+					el.dispatchEvent(new MouseEvent('mousemove', {
+						clientX: ${currentX}, clientY: ${currentY},
+						bubbles: true, cancelable: true,
+					}));
+				})()`,
+			);
 		}
 
 		this.x = x;
@@ -43,28 +50,36 @@ export class Mouse {
 	): Promise<void> {
 		const { button = "left", clickCount = 1 } = options;
 		this.button = button;
+		const buttonNum = button === "left" ? 0 : button === "right" ? 2 : 1;
 
-		await this.cdp.send("Input.dispatchMouseEvent", {
-			type: "mousePressed",
-			x: this.x,
-			y: this.y,
-			button,
-			clickCount,
-		});
+		await this.eval_(
+			`(() => {
+				const el = document.elementFromPoint(${this.x}, ${this.y}) || document.body;
+				el.dispatchEvent(new MouseEvent('mousedown', {
+					clientX: ${this.x}, clientY: ${this.y},
+					button: ${buttonNum}, detail: ${clickCount},
+					bubbles: true, cancelable: true,
+				}));
+			})()`,
+		);
 	}
 
 	async up(
 		options: { button?: MouseButton; clickCount?: number } = {},
 	): Promise<void> {
 		const { button = this.button, clickCount = 1 } = options;
+		const buttonNum = button === "left" ? 0 : button === "right" ? 2 : 1;
 
-		await this.cdp.send("Input.dispatchMouseEvent", {
-			type: "mouseReleased",
-			x: this.x,
-			y: this.y,
-			button,
-			clickCount,
-		});
+		await this.eval_(
+			`(() => {
+				const el = document.elementFromPoint(${this.x}, ${this.y}) || document.body;
+				el.dispatchEvent(new MouseEvent('mouseup', {
+					clientX: ${this.x}, clientY: ${this.y},
+					button: ${buttonNum}, detail: ${clickCount},
+					bubbles: true, cancelable: true,
+				}));
+			})()`,
+		);
 	}
 
 	async click(
@@ -97,13 +112,16 @@ export class Mouse {
 	): Promise<void> {
 		const { deltaX = 0, deltaY = 0 } = options;
 
-		await this.cdp.send("Input.dispatchMouseEvent", {
-			type: "mouseWheel",
-			x: this.x,
-			y: this.y,
-			deltaX,
-			deltaY,
-		});
+		await this.eval_(
+			`(() => {
+				const el = document.elementFromPoint(${this.x}, ${this.y}) || document.body;
+				el.dispatchEvent(new WheelEvent('wheel', {
+					clientX: ${this.x}, clientY: ${this.y},
+					deltaX: ${deltaX}, deltaY: ${deltaY},
+					bubbles: true, cancelable: true,
+				}));
+			})()`,
+		);
 	}
 
 	/**

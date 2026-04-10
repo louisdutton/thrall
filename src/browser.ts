@@ -1,111 +1,53 @@
 /**
- * Browser launcher and manager
+ * Browser launcher and manager using Bun.WebView
  */
 
-import type { CDPSession } from "./cdp";
 import { Page } from "./page";
 
 interface BrowserOptions {
-	headless?: boolean;
 	executablePath?: string;
 	args?: string[];
-}
-
-interface CDPTarget {
-	id: string;
-	type: string;
-	title: string;
-	url: string;
-	webSocketDebuggerUrl?: string;
-}
-
-interface CDPVersionInfo {
-	webSocketDebuggerUrl: string;
+	width?: number;
+	height?: number;
 }
 
 export class Browser {
-	private process: Subprocess | null = null;
-	private cdp: CDPSession | null = null;
-	private debuggerUrl: string;
 	private _pages: Page[] = [];
+	private options: BrowserOptions;
 
-	private constructor(debuggerUrl: string) {
-		this.debuggerUrl = debuggerUrl;
+	private constructor(options: BrowserOptions) {
+		this.options = options;
 	}
 
 	static async launch(options: BrowserOptions = {}): Promise<Browser> {
 		const envDefaults = resolveEnvDefaults(process.env);
-		const {
-			headless = envDefaults.headless ?? true,
-			executablePath = envDefaults.executablePath ?? (await findChromium()),
-			args = envDefaults.args ?? [],
-		} = options;
+		const merged: BrowserOptions = {
+			executablePath: options.executablePath ?? envDefaults.executablePath,
+			args: options.args ?? envDefaults.args,
+			width: options.width ?? 1280,
+			height: options.height ?? 720,
+		};
 
-		const port = await getRandomPort();
-		const userDataDir = `/tmp/thrall-${Date.now()}`;
-
-		const launchArgs = [
-			`--remote-debugging-port=${port}`,
-			`--user-data-dir=${userDataDir}`,
-			"--no-first-run",
-			"--no-default-browser-check",
-			"--disable-background-networking",
-			"--disable-background-timer-throttling",
-			"--disable-backgrounding-occluded-windows",
-			"--disable-breakpad",
-			"--disable-component-extensions-with-background-pages",
-			"--disable-component-update",
-			"--disable-default-apps",
-			"--disable-dev-shm-usage",
-			"--disable-extensions",
-			"--disable-hang-monitor",
-			"--disable-ipc-flooding-protection",
-			"--disable-popup-blocking",
-			"--disable-prompt-on-repost",
-			"--disable-renderer-backgrounding",
-			"--disable-sync",
-			"--enable-features=NetworkService,NetworkServiceInProcess",
-			"--force-color-profile=srgb",
-			"--metrics-recording-only",
-			...(headless ? ["--headless=new"] : []),
-			...args,
-			"about:blank",
-		];
-
-		const proc = Bun.spawn([executablePath, ...launchArgs], {
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-
-		// Wait for CDP to be ready
-		const debuggerUrl = `http://127.0.0.1:${port}`;
-		await waitForCDP(debuggerUrl);
-
-		const browser = new Browser(debuggerUrl);
-		browser.process = proc;
-
-		return browser;
+		return new Browser(merged);
 	}
 
 	async newPage(): Promise<Page> {
-		// Create new target via CDP
-		const response = await fetch(`${this.debuggerUrl}/json/new?about:blank`, {
-			method: "PUT",
-		});
-		const text = await response.text();
+		const config: Record<string, unknown> = {
+			width: this.options.width ?? 1280,
+			height: this.options.height ?? 720,
+		};
 
-		let target: CDPTarget;
-		try {
-			target = JSON.parse(text);
-		} catch {
-			throw new Error(`Failed to create new page. Response: ${text}`);
+		if (this.options.executablePath) {
+			config.backend = {
+				type: "chrome",
+				path: this.options.executablePath,
+				argv: this.options.args,
+			};
 		}
 
-		if (!target.webSocketDebuggerUrl) {
-			throw new Error("Failed to get WebSocket debugger URL for new page");
-		}
+		const view = new Bun.WebView(config);
 
-		const page = await Page.create(target.webSocketDebuggerUrl);
+		const page = new Page(view);
 		this._pages.push(page);
 		return page;
 	}
@@ -119,120 +61,25 @@ export class Browser {
 			await page.close();
 		}
 		this._pages = [];
-
-		if (this.process) {
-			this.process.kill();
-			await this.process.exited;
-			this.process = null;
-		}
 	}
 }
 
-function envBool(val: string | undefined): boolean | undefined {
-	if (val === undefined) return undefined;
-	const v = val.trim().toLowerCase();
-	if (v === "1" || v === "true" || v === "yes") return true;
-	if (v === "0" || v === "false" || v === "no" || v === "") return false;
-	return undefined;
-}
-
-export function resolveEnvDefaults(env: NodeJS.ProcessEnv): Partial<BrowserOptions> {
+export function resolveEnvDefaults(
+	env: NodeJS.ProcessEnv,
+): Partial<BrowserOptions> {
 	const defaults: Partial<BrowserOptions> = {};
 
-	// THRALL_HEADED=1 → headless: false
-	const headed = envBool(env.THRALL_HEADED);
-	if (headed !== undefined) {
-		defaults.headless = !headed;
-	}
-
-	// THRALL_BROWSER → executablePath
+	// THRALL_BROWSER -> executablePath
 	if (env.THRALL_BROWSER) {
 		defaults.executablePath = env.THRALL_BROWSER;
 	}
 
-	// THRALL_ARGS → extra chromium args (comma-separated)
+	// THRALL_ARGS -> extra chromium args (comma-separated)
 	if (env.THRALL_ARGS) {
-		defaults.args = env.THRALL_ARGS.split(",").map((a) => a.trim()).filter(Boolean);
+		defaults.args = env.THRALL_ARGS.split(",")
+			.map((a) => a.trim())
+			.filter(Boolean);
 	}
 
 	return defaults;
 }
-
-async function findChromium(): Promise<string> {
-	// Try which command first (most reliable)
-	for (const bin of [
-		"chromium",
-		"google-chrome",
-		"chromium-browser",
-		"brave-browser",
-		"brave",
-	]) {
-		try {
-			const result = await Bun.$`which ${bin}`.quiet();
-			const found = result.text().trim();
-			if (found && !found.includes("not found")) return found;
-		} catch {
-			// Not found, try next
-		}
-	}
-
-	const paths = [
-		// Linux
-		"/usr/bin/chromium",
-		"/usr/bin/chromium-browser",
-		"/usr/bin/google-chrome",
-		"/usr/bin/google-chrome-stable",
-		"/usr/bin/brave-browser",
-		"/usr/bin/brave",
-		// macOS
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-		// Common Nix paths
-		"/etc/profiles/per-user/louis/bin/chromium",
-		"/etc/profiles/per-user/louis/bin/brave",
-		`${process.env.HOME}/.nix-profile/bin/chromium`,
-		`${process.env.HOME}/.nix-profile/bin/google-chrome-stable`,
-		`${process.env.HOME}/.nix-profile/bin/brave`,
-	];
-
-	for (const path of paths) {
-		const file = Bun.file(path);
-		if (await file.exists()) {
-			return path;
-		}
-	}
-
-	throw new Error(
-		"Could not find Chromium or Brave. Please install a Chromium-based browser or provide executablePath.",
-	);
-}
-
-async function getRandomPort(): Promise<number> {
-	// Use Bun's native server to find an available port
-	const server = Bun.serve({
-		port: 0,
-		fetch: () => new Response(),
-	});
-	const port = server.port!;
-	server.stop();
-	return port;
-}
-
-async function waitForCDP(url: string, timeout = 10000): Promise<void> {
-	const start = Date.now();
-
-	while (Date.now() - start < timeout) {
-		try {
-			const response = await fetch(`${url}/json/version`);
-			if (response.ok) return;
-		} catch {
-			// Not ready yet
-		}
-		await Bun.sleep(50);
-	}
-
-	throw new Error(`Timed out waiting for CDP at ${url}`);
-}
-
-type Subprocess = ReturnType<typeof Bun.spawn>;

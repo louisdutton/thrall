@@ -1,9 +1,9 @@
 import {
-	type UINode,
 	type ElementMatcher,
-	parseHierarchy,
-	findMatch,
 	findAllMatches,
+	findMatch,
+	parseHierarchy,
+	type UINode,
 } from "./element";
 
 export class Device {
@@ -16,8 +16,7 @@ export class Device {
 	static async connect(serial?: string): Promise<Device> {
 		if (serial) {
 			// Verify specified device is available
-			const result =
-				await Bun.$`adb -s ${serial} get-state`.quiet().nothrow();
+			const result = await Bun.$`adb -s ${serial} get-state`.quiet().nothrow();
 			if (result.exitCode !== 0) {
 				throw new Error(`Device ${serial} not available`);
 			}
@@ -138,17 +137,13 @@ export class Device {
 			await Bun.sleep(100);
 		}
 
-		throw new Error(
-			`Timeout waiting for element: ${JSON.stringify(matcher)}`,
-		);
+		throw new Error(`Timeout waiting for element: ${JSON.stringify(matcher)}`);
 	}
 
 	async assertVisible(matcher: ElementMatcher): Promise<UINode> {
 		const node = await this.findElement(matcher);
 		if (!node) {
-			throw new Error(
-				`Element not visible: ${JSON.stringify(matcher)}`,
-			);
+			throw new Error(`Element not visible: ${JSON.stringify(matcher)}`);
 		}
 		return node;
 	}

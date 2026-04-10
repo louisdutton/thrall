@@ -15,7 +15,7 @@
 		"test": "bun test"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "1.3.11"
 	},
 	"peerDependencies": {
 		"typescript": "^5"
@@ -23,7 +23,7 @@
 	"keywords": [
 		"bun",
 		"chromium",
-		"cdp",
+		"webview",
 		"adb",
 		"android",
 		"automation",

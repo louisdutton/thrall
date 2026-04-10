@@ -1,10 +1,8 @@
 /**
- * Screencast - record browser sessions as video via CDP
+ * Screencast - record browser sessions via periodic screenshots
  */
 
-import type { CDPSession } from "./cdp";
-
-interface ScreencastOptions {
+export interface ScreencastOptions {
 	/** Image format for frames */
 	format?: "jpeg" | "png";
 	/** JPEG quality (0-100), only applicable for jpeg format */
@@ -13,38 +11,33 @@ interface ScreencastOptions {
 	maxWidth?: number;
 	/** Maximum height of frames */
 	maxHeight?: number;
-	/** Frames per second to capture */
-	everyNthFrame?: number;
+	/** Capture interval in ms (default: 100 = ~10fps) */
+	interval?: number;
 }
 
 interface ScreencastFrame {
 	data: Buffer;
 	timestamp: number;
-	metadata: {
-		offsetTop: number;
-		pageScaleFactor: number;
-		deviceWidth: number;
-		deviceHeight: number;
-		scrollOffsetX: number;
-		scrollOffsetY: number;
-	};
 }
 
 export class Screencast {
-	private cdp: CDPSession;
+	private view: InstanceType<typeof Bun.WebView>;
 	private frames: ScreencastFrame[] = [];
 	private recording = false;
-	private frameHandler: ((params: any) => void) | null = null;
+	private timer: ReturnType<typeof setInterval> | null = null;
 	private options: Required<ScreencastOptions>;
 
-	constructor(cdp: CDPSession, options: ScreencastOptions = {}) {
-		this.cdp = cdp;
+	constructor(
+		view: InstanceType<typeof Bun.WebView>,
+		options: ScreencastOptions = {},
+	) {
+		this.view = view;
 		this.options = {
 			format: options.format ?? "jpeg",
 			quality: options.quality ?? 80,
 			maxWidth: options.maxWidth ?? 1280,
 			maxHeight: options.maxHeight ?? 720,
-			everyNthFrame: options.everyNthFrame ?? 1,
+			interval: options.interval ?? 100,
 		};
 	}
 
@@ -59,34 +52,27 @@ export class Screencast {
 		this.frames = [];
 		this.recording = true;
 
-		this.frameHandler = async (params: {
-			data: string;
-			metadata: ScreencastFrame["metadata"];
-			sessionId: number;
-		}) => {
+		const capture = async () => {
 			if (!this.recording) return;
-
-			this.frames.push({
-				data: Buffer.from(params.data, "base64"),
-				timestamp: Date.now(),
-				metadata: params.metadata,
-			});
-
-			// Acknowledge frame to receive next one
-			await this.cdp.send("Page.screencastFrameAck", {
-				sessionId: params.sessionId,
-			});
+			try {
+				const blob = await this.view.screenshot({
+					format: this.options.format,
+					quality:
+						this.options.format === "jpeg" ? this.options.quality : undefined,
+				});
+				this.frames.push({
+					data: Buffer.from(await blob.arrayBuffer()),
+					timestamp: Date.now(),
+				});
+			} catch {
+				// Ignore capture errors (e.g. page navigating)
+			}
 		};
 
-		this.cdp.on("Page.screencastFrame", this.frameHandler);
+		// Capture first frame immediately
+		await capture();
 
-		await this.cdp.send("Page.startScreencast", {
-			format: this.options.format,
-			quality: this.options.quality,
-			maxWidth: this.options.maxWidth,
-			maxHeight: this.options.maxHeight,
-			everyNthFrame: this.options.everyNthFrame,
-		});
+		this.timer = setInterval(capture, this.options.interval);
 	}
 
 	/**
@@ -97,11 +83,9 @@ export class Screencast {
 			throw new Error("Screencast not recording");
 		}
 
-		await this.cdp.send("Page.stopScreencast");
-
-		if (this.frameHandler) {
-			this.cdp.off("Page.screencastFrame", this.frameHandler);
-			this.frameHandler = null;
+		if (this.timer) {
+			clearInterval(this.timer);
+			this.timer = null;
 		}
 
 		this.recording = false;

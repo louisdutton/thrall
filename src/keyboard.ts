@@ -1,8 +1,8 @@
 /**
- * Keyboard - keyboard input handling
+ * Keyboard - keyboard input handling backed by Bun.WebView
  */
 
-import type { CDPSession } from "./cdp";
+import type { EvalFn } from "./element";
 
 // Key definitions for special keys
 const KEY_DEFINITIONS: Record<
@@ -44,62 +44,81 @@ const KEY_DEFINITIONS: Record<
 export class Keyboard {
 	private modifiers = 0;
 
-	constructor(private cdp: CDPSession) {}
+	constructor(
+		private view: InstanceType<typeof Bun.WebView>,
+		private eval_: EvalFn,
+	) {}
 
 	async down(key: string): Promise<void> {
-		const def = KEY_DEFINITIONS[key];
-
 		if (key === "Shift") this.modifiers |= 8;
 		if (key === "Control") this.modifiers |= 4;
 		if (key === "Alt") this.modifiers |= 2;
 		if (key === "Meta") this.modifiers |= 1;
 
-		await this.cdp.send("Input.dispatchKeyEvent", {
-			type: "keyDown",
-			modifiers: this.modifiers,
-			key: def?.key ?? key,
-			code: def?.code ?? `Key${key.toUpperCase()}`,
-			windowsVirtualKeyCode: def?.keyCode ?? key.charCodeAt(0),
-		});
+		const def = KEY_DEFINITIONS[key];
+		const keyVal = def?.key ?? key;
+		const code = def?.code ?? `Key${key.toUpperCase()}`;
+		const keyCode = def?.keyCode ?? key.charCodeAt(0);
+
+		await this.eval_(
+			`document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+				key: ${JSON.stringify(keyVal)},
+				code: ${JSON.stringify(code)},
+				keyCode: ${keyCode},
+				bubbles: true,
+				cancelable: true,
+				shiftKey: ${!!(this.modifiers & 8)},
+				ctrlKey: ${!!(this.modifiers & 4)},
+				altKey: ${!!(this.modifiers & 2)},
+				metaKey: ${!!(this.modifiers & 1)},
+			}))`,
+		);
 	}
 
 	async up(key: string): Promise<void> {
-		const def = KEY_DEFINITIONS[key];
-
 		if (key === "Shift") this.modifiers &= ~8;
 		if (key === "Control") this.modifiers &= ~4;
 		if (key === "Alt") this.modifiers &= ~2;
 		if (key === "Meta") this.modifiers &= ~1;
 
-		await this.cdp.send("Input.dispatchKeyEvent", {
-			type: "keyUp",
-			modifiers: this.modifiers,
-			key: def?.key ?? key,
-			code: def?.code ?? `Key${key.toUpperCase()}`,
-			windowsVirtualKeyCode: def?.keyCode ?? key.charCodeAt(0),
-		});
+		const def = KEY_DEFINITIONS[key];
+		const keyVal = def?.key ?? key;
+		const code = def?.code ?? `Key${key.toUpperCase()}`;
+		const keyCode = def?.keyCode ?? key.charCodeAt(0);
+
+		await this.eval_(
+			`document.activeElement?.dispatchEvent(new KeyboardEvent('keyup', {
+				key: ${JSON.stringify(keyVal)},
+				code: ${JSON.stringify(code)},
+				keyCode: ${keyCode},
+				bubbles: true,
+				cancelable: true,
+				shiftKey: ${!!(this.modifiers & 8)},
+				ctrlKey: ${!!(this.modifiers & 4)},
+				altKey: ${!!(this.modifiers & 2)},
+				metaKey: ${!!(this.modifiers & 1)},
+			}))`,
+		);
 	}
 
 	async press(key: string): Promise<void> {
-		await this.down(key);
-		await this.up(key);
+		const def = KEY_DEFINITIONS[key];
+		await this.view.press(def?.key ?? key);
 	}
 
 	async type(text: string, options: { delay?: number } = {}): Promise<void> {
 		const { delay = 0 } = options;
 
+		if (delay === 0) {
+			await this.view.type(text);
+			return;
+		}
+
 		for (const char of text) {
 			if (KEY_DEFINITIONS[char]) {
 				await this.press(char);
 			} else {
-				await this.cdp.send("Input.dispatchKeyEvent", {
-					type: "keyDown",
-					text: char,
-				});
-				await this.cdp.send("Input.dispatchKeyEvent", {
-					type: "keyUp",
-					text: char,
-				});
+				await this.view.press(char);
 			}
 
 			if (delay > 0) {
