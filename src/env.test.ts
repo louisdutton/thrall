@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveEnvDefaults } from "./browser";
+import { resolveEnvDefaults } from "./page";
 
 describe("resolveEnvDefaults", () => {
 	test("returns empty defaults with no env vars", () => {

@@ -1,20 +1,9 @@
 /**
- * Thrall - Lightweight Chromium automation for Bun
+ * Thrall - Lightweight browser automation for Bun
  */
 
 export { connect as connectDevice, Device } from "./adb";
-export { Browser } from "./browser";
 export { ElementHandle } from "./element";
-export { Keyboard } from "./keyboard";
-export { Mouse } from "./mouse";
-export { Page } from "./page";
+export { Page, launch } from "./page";
+export type { PageOptions } from "./page";
 export { Screencast } from "./screencast";
-
-import { Browser } from "./browser";
-
-/**
- * Launch a new browser instance
- */
-export async function launch(options?: Parameters<typeof Browser.launch>[0]) {
-	return Browser.launch(options);
-}

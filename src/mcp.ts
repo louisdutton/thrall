@@ -2,7 +2,7 @@
  * MCP Server for Thrall
  */
 
-import { type Browser, launch, type Page } from "./index";
+import { launch, type Page } from "./index";
 
 interface JSONRPCRequest {
 	jsonrpc: "2.0";
@@ -156,22 +156,6 @@ const TOOLS = [
 		inputSchema: { type: "object", properties: {} },
 	},
 	{
-		name: "set_geolocation",
-		description: "Override browser geolocation.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				latitude: { type: "number", description: "Latitude" },
-				longitude: { type: "number", description: "Longitude" },
-				accuracy: {
-					type: "number",
-					description: "Accuracy in meters (default: 1)",
-				},
-			},
-			required: ["latitude", "longitude"],
-		},
-	},
-	{
 		name: "get_by_text",
 		description: "Find element by text content.",
 		inputSchema: {
@@ -201,7 +185,6 @@ const TOOLS = [
 ] as const;
 
 class MCPServer {
-	private browser: Browser | null = null;
 	private page: Page | null = null;
 
 	async handleRequest(req: JSONRPCRequest): Promise<JSONRPCResponse> {
@@ -223,7 +206,7 @@ class MCPServer {
 				return {
 					protocolVersion: "2024-11-05",
 					capabilities: { tools: {} },
-					serverInfo: { name: "thrall", version: "0.1.0" },
+					serverInfo: { name: "thrall", version: "0.2.0" },
 				};
 
 			case "notifications/initialized":
@@ -250,16 +233,14 @@ class MCPServer {
 
 		switch (name) {
 			case "launch": {
-				if (this.browser) await this.browser.close();
-				this.browser = await launch();
-				this.page = await this.browser.newPage();
+				if (this.page) await this.page.close();
+				this.page = await launch();
 				return { content: [{ type: "text", text: "Browser launched" }] };
 			}
 
 			case "close": {
-				if (this.browser) {
-					await this.browser.close();
-					this.browser = null;
+				if (this.page) {
+					await this.page.close();
 					this.page = null;
 				}
 				return { content: [{ type: "text", text: "Browser closed" }] };
@@ -371,23 +352,6 @@ class MCPServer {
 				return { content: [{ type: "text", text: "Navigated forward" }] };
 			}
 
-			case "set_geolocation": {
-				this.requirePage();
-				await this.page!.setGeolocation({
-					latitude: args.latitude as number,
-					longitude: args.longitude as number,
-					accuracy: args.accuracy as number | undefined,
-				});
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Geolocation set to ${args.latitude}, ${args.longitude}`,
-						},
-					],
-				};
-			}
-
 			case "get_by_text": {
 				this.requirePage();
 				const el = await this.page!.getByText(args.text as string, {
@@ -420,8 +384,8 @@ class MCPServer {
 	}
 
 	async cleanup(): Promise<void> {
-		if (this.browser) {
-			await this.browser.close();
+		if (this.page) {
+			await this.page.close();
 		}
 	}
 }

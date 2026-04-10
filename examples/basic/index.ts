@@ -1,7 +1,6 @@
 import { launch } from "../../src/index";
 
-const browser = await launch();
-const page = await browser.newPage();
+const page = await launch();
 
 // Navigate to a page
 await page.goto("https://example.com");
@@ -28,4 +27,4 @@ console.log("Links:", linkCount);
 await page.screenshot({ path: "screenshot.png" });
 console.log("Screenshot saved to screenshot.png");
 
-await browser.close();
+await page.close();

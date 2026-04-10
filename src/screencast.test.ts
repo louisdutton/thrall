@@ -1,16 +1,14 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { type Browser, launch, type Page, Screencast } from "./index";
+import { launch, type Page, Screencast } from "./index";
 
-let browser: Browser;
 let page: Page;
 
 beforeAll(async () => {
-	browser = await launch();
-	page = await browser.newPage();
+	page = await launch();
 });
 
 afterAll(async () => {
-	await browser.close();
+	await page.close();
 });
 
 test("startScreencast returns Screencast instance", async () => {
@@ -58,7 +56,6 @@ test("screencast frameCount returns correct count", async () => {
 	await Bun.sleep(300);
 
 	const frames = await screencast.stop();
-	// After stop, frameCount matches returned frames
 	expect(screencast.frameCount()).toBe(frames.length);
 });
 

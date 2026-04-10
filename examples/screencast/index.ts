@@ -1,7 +1,6 @@
 import { launch } from "../../src/index";
 
-const browser = await launch();
-const page = await browser.newPage();
+const page = await launch();
 
 // Start recording
 console.log("Starting screencast...");
@@ -44,4 +43,4 @@ try {
 	console.log(`Saved ${paths.length} frames to frames/`);
 }
 
-await browser.close();
+await page.close();

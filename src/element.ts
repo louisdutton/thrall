@@ -2,21 +2,14 @@
  * ElementHandle - represents a DOM element backed by Bun.WebView
  */
 
-/** Serialized evaluate function to avoid "already pending" conflicts */
-export type EvalFn = <T>(expression: string) => Promise<T>;
+import type { Page } from "./page";
 
 export class ElementHandle {
 	constructor(
-		private view: InstanceType<typeof Bun.WebView>,
+		private page: Page,
 		private selector: string,
 		private index: number = 0,
-		private _eval?: EvalFn,
 	) {}
-
-	private eval<T>(expression: string): Promise<T> {
-		if (this._eval) return this._eval<T>(expression);
-		return this.view.evaluate(expression) as Promise<T>;
-	}
 
 	private resolve(): string {
 		if (this.index === 0) {
@@ -26,31 +19,52 @@ export class ElementHandle {
 	}
 
 	async click(): Promise<void> {
-		await this.eval<void>(`${this.resolve()}.click()`);
+		await this.page._eval<void>(`${this.resolve()}.click()`);
+	}
+
+	/** Click element natively to establish WebView focus (for type/fill). */
+	private async _nativeClick(): Promise<void> {
+		if (this.index === 0) {
+			await this.page.view.click(this.selector);
+		} else {
+			// For nth elements, use JS click + focus
+			await this.page._eval<void>(`(() => {
+				const el = ${this.resolve()};
+				if (el) { el.focus(); el.click(); }
+			})()`);
+		}
 	}
 
 	async type(text: string, options: { delay?: number } = {}): Promise<void> {
 		const { delay = 0 } = options;
-
-		await this.focus();
-
-		for (const char of text) {
-			await this.view.press(char);
-
-			if (delay > 0) {
-				await Bun.sleep(delay);
+		await this._nativeClick();
+		if (delay === 0) {
+			await this.page.view.type(text);
+		} else {
+			for (const char of text) {
+				await this.page.view.press(char);
+				if (delay > 0) await Bun.sleep(delay);
 			}
 		}
 	}
 
-	async humanType(
-		text: string,
-		options: { delay?: number } = {},
-	): Promise<void> {
+	async fill(value: string): Promise<void> {
+		await this._nativeClick();
+		await this.page._eval<void>(
+			`(() => {
+				const el = ${this.resolve()};
+				el.value = ${JSON.stringify(value)};
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+				el.dispatchEvent(new Event('change', { bubbles: true }));
+			})()`,
+		);
+	}
+
+	async humanType(text: string, options: { delay?: number } = {}): Promise<void> {
 		const { delay = 40 } = options;
 		await this.focus();
 
-		await this.eval<void>(
+		await this.page._eval<void>(
 			`(async () => {
 				const el = ${this.resolve()};
 				el.value = '';
@@ -66,26 +80,12 @@ export class ElementHandle {
 		);
 	}
 
-	async fill(value: string): Promise<void> {
-		await this.focus();
-
-		await this.eval<void>(
-			`(() => {
-				const el = ${this.resolve()};
-				el.value = '';
-				el.value = ${JSON.stringify(value)};
-				el.dispatchEvent(new Event('input', { bubbles: true }));
-				el.dispatchEvent(new Event('change', { bubbles: true }));
-			})()`,
-		);
-	}
-
 	async focus(): Promise<void> {
-		await this.eval<void>(`${this.resolve()}.focus()`);
+		await this.page._eval<void>(`${this.resolve()}.focus()`);
 	}
 
 	async hover(): Promise<void> {
-		await this.eval<void>(
+		await this.page._eval<void>(
 			`(() => {
 				const el = ${this.resolve()};
 				if (!el) return;
@@ -106,25 +106,25 @@ export class ElementHandle {
 	}
 
 	async textContent(): Promise<string | null> {
-		return this.eval<string | null>(`${this.resolve()}?.textContent ?? null`);
+		return this.page._eval<string | null>(`${this.resolve()}?.textContent ?? null`);
 	}
 
 	async innerText(): Promise<string> {
-		return this.eval<string>(`${this.resolve()}.innerText`);
+		return this.page._eval<string>(`${this.resolve()}.innerText`);
 	}
 
 	async innerHTML(): Promise<string> {
-		return this.eval<string>(`${this.resolve()}.innerHTML`);
+		return this.page._eval<string>(`${this.resolve()}.innerHTML`);
 	}
 
 	async getAttribute(name: string): Promise<string | null> {
-		return this.eval<string | null>(
+		return this.page._eval<string | null>(
 			`${this.resolve()}?.getAttribute(${JSON.stringify(name)}) ?? null`,
 		);
 	}
 
 	async isVisible(): Promise<boolean> {
-		return this.eval<boolean>(
+		return this.page._eval<boolean>(
 			`(() => {
 				const el = ${this.resolve()};
 				if (!el) return false;
@@ -138,13 +138,72 @@ export class ElementHandle {
 		);
 	}
 
+	async isChecked(): Promise<boolean> {
+		return this.page._eval<boolean>(`!!${this.resolve()}.checked`);
+	}
+
+	async isDisabled(): Promise<boolean> {
+		return this.page._eval<boolean>(`!!${this.resolve()}.disabled`);
+	}
+
+	async isEditable(): Promise<boolean> {
+		return this.page._eval<boolean>(
+			`(() => {
+				const el = ${this.resolve()};
+				if (!el) return false;
+				if (el.disabled || el.readOnly) return false;
+				const tag = el.tagName.toLowerCase();
+				return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+			})()`,
+		);
+	}
+
+	async inputValue(): Promise<string> {
+		return this.page._eval<string>(`${this.resolve()}.value ?? ''`);
+	}
+
+	async check(): Promise<void> {
+		const checked = await this.isChecked();
+		if (!checked) await this.click();
+	}
+
+	async uncheck(): Promise<void> {
+		const checked = await this.isChecked();
+		if (checked) await this.click();
+	}
+
+	async selectOption(
+		value: string | string[] | { label?: string; value?: string; index?: number },
+	): Promise<void> {
+		const opts = Array.isArray(value) ? value.map((v) => ({ value: v }))
+			: typeof value === "string" ? [{ value }]
+			: [value];
+
+		await this.page._eval<void>(
+			`(() => {
+				const sel = ${this.resolve()};
+				const opts = ${JSON.stringify(opts)};
+				for (const opt of opts) {
+					for (const o of sel.options) {
+						const match = (opt.value !== undefined && o.value === opt.value)
+							|| (opt.label !== undefined && o.label === opt.label)
+							|| (opt.index !== undefined && o.index === opt.index);
+						if (match) { o.selected = true; break; }
+					}
+				}
+				sel.dispatchEvent(new Event('input', { bubbles: true }));
+				sel.dispatchEvent(new Event('change', { bubbles: true }));
+			})()`,
+		);
+	}
+
 	async boundingBox(): Promise<{
 		x: number;
 		y: number;
 		width: number;
 		height: number;
 	} | null> {
-		return this.eval<{
+		return this.page._eval<{
 			x: number;
 			y: number;
 			width: number;
@@ -161,12 +220,11 @@ export class ElementHandle {
 	}
 
 	async screenshot(options: { path?: string } = {}): Promise<Buffer> {
-		// Scroll element into view and take a viewport screenshot
-		await this.eval<void>(
+		await this.page._eval<void>(
 			`${this.resolve()}?.scrollIntoView({ block: 'center' })`,
 		);
 
-		const blob = await this.view.screenshot({ format: "png" });
+		const blob = await this.page.view.screenshot({ format: "png" });
 		const buffer = Buffer.from(await blob.arrayBuffer());
 
 		if (options.path) {
